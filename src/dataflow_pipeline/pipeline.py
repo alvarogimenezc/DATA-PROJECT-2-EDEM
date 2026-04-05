@@ -1,3 +1,5 @@
+import apache_beam as beam
+
 #Simulamos el stream de eventos JSON que llegará desde Pub/Sub
 mensajes_simulados = [
     {
@@ -21,13 +23,20 @@ mensajes_simulados = [
 ]
 
 #conversión a estado
-def procesar_pasos(mensaje):
-    pasos_dados = mensaje["steps"]
-    ejercitos_ganados = pasos_dados // 100
-    print(f"-> El {mensaje['player_id']} ha dado {pasos_dados} pasos en {mensaje['tile_id']}. Gana {ejercitos_ganados} ejércitos.")
-    return ejercitos_ganados
+class ProcesarPasosDoFn(beam.DoFn):
+    def process(self, mensaje):
+        pasos_dados = mensaje["steps"]
+        ejercitos_ganados = pasos_dados // 100
+        mensaje["ejercitos"] = ejercitos_ganados
+        print(f"[BEAM WORKER] -> El {mensaje['player_id']} ha dado {pasos_dados} pasos en {mensaje['tile_id']}. Gana {ejercitos_ganados} ejércitos.")
+        yield [mensaje]
 
 if __name__ == "__main__":
-    print("--- INICIANDO PRUEBA ---")
-for event in mensajes_simulados:
-        procesar_pasos(event)
+    print("--- INICIANDO PRUEBA CON ESTRUCTURA APACHE BEAM ---")
+
+with beam.Pipeline() as pipeline:
+    (
+            pipeline 
+            | "Ingestar Datos Simulados" >> beam.Create(mensajes_simulados) 
+            | "Calcular Ejércitos" >> beam.ParDo(ProcesarPasosDoFn())
+    )
