@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 #API Key desde variable de entorno (NO hardcodeada, es decir, sin escribir valores fijos directamente en el codigo)
 #Debemos meter la api key en el contenedor para que sea accesible 
-API_KEY = os.getenv("API_KEY")
+API_KEY = "311e34f13899f30c02c390854ae76b32"
 if not API_KEY:
     logger.error("ERROR: Debes configurar la variable API_KEY")
     exit(1)
@@ -33,7 +33,7 @@ def realtime_data():
 
     return {
         "timestamp": item["dt"],
-        "ciudad": "Granada",
+        "ciudad": "Valencia",
         "aqi": item["main"]["aqi"],
         "co": item["components"]["co"],
         "no2": item["components"]["no2"],
@@ -43,9 +43,14 @@ def realtime_data():
     }    
 
 #Función principal, bucle infinito para obtener datos de calidad de aire en tiempo real
-while true: 
+while True: 
     try: 
         data = realtime_data()
-        logger.info(f"Datos de calidad del aire: {data}")
+
+        #Definimos ahora la lógica de negocio para enviar a pub/sub
+        #Solo usaremos el AQUI para determinar la calidad, ya que incluye una combinación del resto de contaminantes
+        indice_multiplicador_aire= 1.5 - (data["aqi"] - 1)*(0.9/4)
+        logger.info(f"Índice multiplicador de puntos por calidad del aire: {indice_multiplicador_aire}")
+
     except Exception as e: 
         logger.error(f"Error al obtener datos: {e}")
