@@ -1,0 +1,51 @@
+# ============================================================
+# Dockerfile del consumer (back/)
+# Construye una imagen mínima con Python 3.11 + FastAPI
+# ============================================================
+
+# Imagen base: Python 3.11 versión "slim".
+# - "slim" = Debian recortado, sin paquetes innecesarios (~50 MB en vez de ~900 MB).
+# - Suficiente porque el consumer no necesita libs del sistema (a diferencia
+#   del walker, que sí necesitaba libgeos/proj para osmnx).
+FROM python:3.11-slim
+
+# Carpeta de trabajo dentro del contenedor.
+# Si no existe, Docker la crea. A partir de aquí, todos los COPY/RUN
+# se ejecutan relativos a /app.
+WORKDIR /app
+
+# Copiamos PRIMERO solo requirements.txt (no el código).
+# ¿Por qué separado? Por la cache de Docker:
+# - Cada línea del Dockerfile crea una capa cacheada.
+# - Si solo cambias main.py, la capa de "pip install" sigue válida
+#   y no reinstala nada -> builds rapidísimas.
+# - Si copiáramos todo de golpe, cualquier cambio en main.py
+#   invalidaría la cache de pip.
+COPY requirements.txt .
+
+# Instala las dependencias listadas en requirements.txt.
+# --no-cache-dir: no guarda los .whl descargados -> imagen final más pequeña.
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Ahora sí copiamos el código de la aplicación.
+# Esta capa se invalidará cada vez que toques main.py, pero
+# la capa anterior (pip install) seguirá cacheada.
+COPY main.py .
+
+# Documentación: avisa de que el contenedor escucha en el puerto 8080.
+# OJO: EXPOSE NO publica el puerto al host, solo es metadato informativo.
+# Para que sea accesible desde fuera hay que usar `-p` en `docker run`.
+# Usamos 8080 porque es el estándar que espera Cloud Run.
+EXPOSE 8080
+
+# Comando que se ejecuta al arrancar el contenedor.
+# Lanza uvicorn (servidor ASGI) cargando la app `app` del módulo `main`.
+# - --host 0.0.0.0  -> escucha en todas las interfaces del contenedor
+#                     (si pusiéramos 127.0.0.1, el -p de Docker no funcionaría).
+# - --port 8080     -> mismo puerto que EXPOSE.
+#
+# Forma "exec" (lista JSON) en lugar de string: hace que uvicorn sea
+# el proceso PID 1 del contenedor y reciba directamente las señales
+# (Ctrl+C, SIGTERM de Cloud Run para apagado limpio).
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+
