@@ -1,0 +1,56 @@
+services:
+  walker:
+    build: ./data_generator
+    container_name: walker
+    env_file: .env
+    volumes:
+      - ${ADC_PATH}:/tmp/adc.json:ro
+
+#       ${ADC_PATH}         :  /tmp/adc.json   :  ro -> ro = read only (solo lectura)
+#          ↑                       ↑               ↑
+#       origen (host)        destino (contenedor)  modo
+
+# Docker Compose sustituye esta variable con lo que tengas en .env
+# ADC_PATH=/home/ricardo/Documentos/TFG/TFG-2024-06-ricardo-alvaro/adc.json
+# en mi caso es C:/Users/Nombre-de-PC/AppData/Roaming/gcloud/application_default_credentials.json
+
+
+  consumer:
+    build: ./consumer
+    container_name: consumer
+    env_file: .env
+    volumes:
+      - ${ADC_PATH}:/tmp/adc.json:ro
+
+  backend:
+    build: ./backend
+    container_name: backend
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${ADC_PATH}:/tmp/adc.json:ro
+
+  # frontend:  # lo mete Ricardo
+  #   build: ./frontend
+  #   container_name: frontend
+  #   environment:
+  #     - BACKEND_URL=http://backend:8080
+  #   ports:
+  #     - "8501:8501"
+  #   depends_on:
+  #     - backend
+
+  # air-quality:  # lo mete Alvaro
+  #   build: ./weather_airq
+  #   container_name: air-quality
+  #   env_file: .env
+  #   volumes:
+  #     - ${ADC_PATH}:/tmp/adc.json:ro
+
+  # weather:  # lo mete Alvaro
+  #   build: ./weather_airq
+  #   container_name: weather
+  #   env_file: .env
+  #   volumes:
+  #     - ${ADC_PATH}:/tmp/adc.json:ro
