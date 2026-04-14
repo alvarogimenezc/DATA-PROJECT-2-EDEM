@@ -1,0 +1,31 @@
+steps:
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    id: Build Walker Image
+    args: ['builds', 'submit', './data_generator',
+           '--tag=$_REGION_ID-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REGISTRY_REPOSITORY/$_WALKER_IMAGE_NAME:$COMMIT_SHA'
+    ]
+    waitFor: ['-']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    id: Deploy Walker as Cloud Run Job
+    args: ['run', 'jobs', 'deploy', '$_WALKER_JOB_NAME',
+           '--image=$_REGION_ID-docker.pkg.dev/$PROJECT_ID/$_ARTIFACT_REGISTRY_REPOSITORY/$_WALKER_IMAGE_NAME:$COMMIT_SHA',
+           '--region=$_REGION_ID',
+           '--max-retries=1',
+           '--task-timeout=3600s',
+           '--set-env-vars=PROJECT_ID=$PROJECT_ID,TOPIC_ID=$_PLAYER_MOVEMENTS_TOPIC,PLAYER_ID=$_DEFAULT_PLAYER_ID'
+    ]
+    waitFor: ['Build Walker Image']
+
+options:
+  logging: STACKDRIVER_ONLY
+
+substitutions:
+  _REGION_ID: europe-west1
+  _ARTIFACT_REGISTRY_REPOSITORY: cloudrisk-images
+  _WALKER_IMAGE_NAME: walker
+  _WALKER_JOB_NAME: walker
+  _PLAYER_MOVEMENTS_TOPIC: player-movements
+  _DEFAULT_PLAYER_ID: player_001
