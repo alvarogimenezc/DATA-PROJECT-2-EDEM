@@ -1,0 +1,15 @@
+#Creamos una imagen base, ambos srcipts necesitan las mismas dependencias!!
+FROM python:3.11-slim AS base  
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+#Ejecuta el scrip de air_quality.py
+FROM base AS air_quality
+COPY air_quality.py .
+CMD ["python", "-u", "air_quality.py"]
+
+#Ejecuta el scrip de weather.py
+FROM base AS weather
+COPY weather.py .
+CMD ["python", "-u", "weather.py"]
