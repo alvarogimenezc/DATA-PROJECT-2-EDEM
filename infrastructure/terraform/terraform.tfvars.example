@@ -10,4 +10,4 @@
 
 project_id = "cloudrisk-492619"
 region     = "europe-west1"
-jwt_secret = "sustituye-esto-por-64-hex-chars-aleatorios-minimo-32"
+jwt_secret = "09c57fad53f9b0b1ec847ff037ff1e07068dca582b76a757e0d438c34dd9e776"
