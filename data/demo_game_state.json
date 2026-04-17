@@ -1,0 +1,216 @@
+{
+  "_comment": "Estado de juego 'precocinado' para arrancar la demo con la partida a la mitad. Idempotente: scripts/sembrar_demo.py lo aplica con merge=True, así que re-ejecutarlo no crea duplicados. Si cambias aquí, vuelve a correr bootstrap.",
+  "_schema_version": 2,
+  "game_time": {
+    "started_at": "2026-04-14T09:00:00Z",
+    "current_turn": 7,
+    "turn_duration_hours": 4
+  },
+  "players": [
+    {
+      "id": "demo-player-001",
+      "name": "Comandante Norte",
+      "email": "norte@cloudrisk.app",
+      "password": "demo1234",
+      "clan_color": "#ff2d92",
+      "spawn_zone": "zona-borbot",
+      "total_steps": 15420,
+      "armies": 280,
+      "gold": 640,
+      "power_points": 1540,
+      "level": 3,
+      "battles_won": 8,
+      "battles_lost": 2,
+      "kills": 42
+    },
+    {
+      "id": "demo-player-002",
+      "name": "Comandante Sur",
+      "email": "sur@cloudrisk.app",
+      "password": "demo1234",
+      "clan_color": "#caff33",
+      "spawn_zone": "zona-pinedo",
+      "total_steps": 12180,
+      "armies": 220,
+      "gold": 480,
+      "power_points": 1218,
+      "level": 3,
+      "battles_won": 6,
+      "battles_lost": 3,
+      "kills": 28
+    },
+    {
+      "id": "demo-player-003",
+      "name": "Comandante Este",
+      "email": "este@cloudrisk.app",
+      "password": "demo1234",
+      "clan_color": "#00f0ff",
+      "spawn_zone": "zona-malva-rosa",
+      "total_steps": 18900,
+      "armies": 340,
+      "gold": 820,
+      "power_points": 1890,
+      "level": 4,
+      "battles_won": 11,
+      "battles_lost": 2,
+      "kills": 57
+    },
+    {
+      "id": "demo-player-004",
+      "name": "Comandante Oeste",
+      "email": "oeste@cloudrisk.app",
+      "password": "demo1234",
+      "clan_color": "#a855f7",
+      "spawn_zone": "zona-benimàmet",
+      "total_steps": 10240,
+      "armies": 190,
+      "gold": 360,
+      "power_points": 1024,
+      "level": 2,
+      "battles_won": 4,
+      "battles_lost": 4,
+      "kills": 18
+    }
+  ],
+  "zone_ownership": {
+    "_comment": "Reparto realista tras 6 turnos. 38 zonas conquistadas, 48 libres. Fácil ver en el mapa quién domina qué.",
+    "demo-player-001": {
+      "color": "#ff2d92",
+      "zones": [
+        "zona-borbot",
+        "zona-benicalap",
+        "zona-benimaclet",
+        "zona-torrefiel",
+        "zona-els-orriols",
+        "zona-ciutat-fallera",
+        "zona-sant-llorenc",
+        "zona-beniferri",
+        "zona-carpesa",
+        "zona-morvedre"
+      ],
+      "armies_per_zone": 28
+    },
+    "demo-player-002": {
+      "color": "#caff33",
+      "zones": [
+        "zona-pinedo",
+        "zona-natzaret",
+        "zona-la-punta",
+        "zona-el-castellar",
+        "zona-el-forn-d-alcedo",
+        "zona-la-torre",
+        "zona-faitanar",
+        "zona-sant-marcelli"
+      ],
+      "armies_per_zone": 27
+    },
+    "demo-player-003": {
+      "color": "#00f0ff",
+      "zones": [
+        "zona-la-malva-rosa",
+        "zona-el-cabanyal",
+        "zona-el-grau",
+        "zona-natzaret-2",
+        "zona-aiora",
+        "zona-penya-roja",
+        "zona-cami-fondo",
+        "zona-albors",
+        "zona-l-amistat",
+        "zona-mestalla",
+        "zona-ciutat-jardi",
+        "zona-l-illa-perduda"
+      ],
+      "armies_per_zone": 28
+    },
+    "demo-player-004": {
+      "color": "#a855f7",
+      "zones": [
+        "zona-benimàmet",
+        "zona-campanar",
+        "zona-les-tendetes",
+        "zona-el-calvari",
+        "zona-sant-pau",
+        "zona-nou-moles",
+        "zona-la-fontsanta",
+        "zona-mauella"
+      ],
+      "armies_per_zone": 23
+    }
+  },
+  "recent_battles": [
+    {
+      "ts": "2026-04-14T11:42:00Z",
+      "zone_id": "zona-morvedre",
+      "attacker": "demo-player-001",
+      "defender": "demo-player-003",
+      "attacker_armies": 35,
+      "defender_armies": 28,
+      "outcome": "attacker_wins",
+      "attacker_losses": 12,
+      "defender_losses": 28
+    },
+    {
+      "ts": "2026-04-14T10:15:00Z",
+      "zone_id": "zona-albors",
+      "attacker": "demo-player-003",
+      "defender": "demo-player-002",
+      "attacker_armies": 40,
+      "defender_armies": 22,
+      "outcome": "attacker_wins",
+      "attacker_losses": 10,
+      "defender_losses": 22
+    },
+    {
+      "ts": "2026-04-14T09:50:00Z",
+      "zone_id": "zona-mislata",
+      "attacker": "demo-player-002",
+      "defender": "demo-player-004",
+      "attacker_armies": 18,
+      "defender_armies": 25,
+      "outcome": "defender_wins",
+      "attacker_losses": 18,
+      "defender_losses": 7
+    }
+  ],
+  "environmental_factors": {
+    "_comment": "Últimas 3 horas de medidas ambientales falseadas — lo que la pipeline Dataflow debería haber escrito en BQ. sembrar_demo.py las publica en Pub/Sub para que aparezcan en BigQuery tras la pipeline.",
+    "samples": [
+      {
+        "ts": "2026-04-14T11:00:00Z",
+        "source": "air_quality",
+        "zone_id": "zona-cabanyal",
+        "aqi": 2,
+        "pm25": 12.4,
+        "pm10": 24.8,
+        "multiplier": 1.275
+      },
+      {
+        "ts": "2026-04-14T10:30:00Z",
+        "source": "air_quality",
+        "zone_id": "zona-borbot",
+        "aqi": 4,
+        "pm25": 35.2,
+        "pm10": 72.1,
+        "multiplier": 0.85
+      },
+      {
+        "ts": "2026-04-14T10:00:00Z",
+        "source": "weather",
+        "zone_id": "zona-pinedo",
+        "temperature_c": 22.3,
+        "humidity_pct": 68,
+        "wind_kmh": 14,
+        "multiplier": 1.1
+      },
+      {
+        "ts": "2026-04-14T09:30:00Z",
+        "source": "weather",
+        "zone_id": "zona-malva-rosa",
+        "temperature_c": 19.8,
+        "humidity_pct": 74,
+        "wind_kmh": 22,
+        "multiplier": 1.0
+      }
+    ]
+  }
+}

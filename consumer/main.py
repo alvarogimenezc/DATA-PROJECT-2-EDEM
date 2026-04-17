@@ -1,36 +1,95 @@
-import os
+"""
+CloudRISK — Pub/Sub Debug Consumer
+Subscribes to `player-movements-sub` using the PULL model and prints
+each message to stdout. Intentionally simple: real processing lives
+in the Dataflow pipeline (Noelia + Martha). This service exists so the
+team can tail Pub/Sub activity from docker compose without gcloud CLI.
+
+Why PULL (and not PUSH)?
+    The consumer controls the pacing — no HTTP endpoint to expose, no
+    deadletter surprises if the container restarts. For a debug tool
+    that may run on the dev laptop, PULL is the simpler choice.
+
+EDEM. Master Big Data & Cloud 2025/2026
+Professor: Javi Briones & Adriana Campos
+"""
+
+from datetime import datetime, timezone
 import json
+import logging
+import os
+import signal
+import sys
+
 from google.cloud import pubsub_v1
-from concurrent.futures import TimeoutError
 
-PROJECT_ID = os.environ.get("PROJECT_ID", "cloudrisk-492619")
-SUBSCRIPTION_ID = os.environ.get("SUBSCRIPTION_ID", "player-movements-consumer")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("consumer")
 
-subscriber = pubsub_v1.SubscriberClient()
-sub_path = subscriber.subscription_path(PROJECT_ID, SUBSCRIPTION_ID)
+PROJECT_ID = os.environ.get("PUBSUB_PROJECT", "cloudrisk-492619")
+SUBSCRIPTION = os.environ.get("SUBSCRIPTION", "player-movements-sub")
 
 
-def callback(message):
+""" Helpful functions """
+def iso_now():
+    """
+    Get the current timestamp in ISO format.
+    Returns:
+        str: Current timestamp in ISO format.
+    """
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _callback(message):
+    """
+    Handle a single Pub/Sub message: parse, log, and ack.
+    Args:
+        message (pubsub_v1.subscriber.message.Message): The received message.
+    Returns:
+        None
+    """
+
     try:
-        event = json.loads(message.data.decode("utf-8"))
-        print(
-            f"[consumer] msg_id={message.message_id} "
-            f"player={event.get('player_id')} "
-            f"pos=({event.get('latitude'):.5f},{event.get('longitude'):.5f}) "
-            f"speed={event.get('speed_mps')} "
-            f"ts={event.get('timestamp')}",
-            flush=True,
+        data = json.loads(message.data.decode("utf-8"))
+        log.info(
+            f"[{data.get('timestamp','?')}] "
+            f"{data.get('player_id','?'):<20} "
+            f"lat={data.get('latitude',0):.4f} "
+            f"lon={data.get('longitude',0):.4f} "
+            f"speed={data.get('speed_mps','?')} m/s"
         )
+    except Exception as exc:
+        log.warning(f"Failed to parse message {message.message_id}: {exc}")
+    finally:
         message.ack()
-    except Exception as e:
-        print(f"[consumer] ERROR msg_id={message.message_id}: {e}", flush=True)
-        message.nack()
 
 
-print(f"[consumer] Escuchando en {sub_path}", flush=True)
-streaming_pull = subscriber.subscribe(sub_path, callback=callback)
-try:
-    streaming_pull.result()
-except (KeyboardInterrupt, TimeoutError):
-    streaming_pull.cancel()
-    streaming_pull.result()
+""" Main loop """
+def main():
+    """
+    Start the streaming pull subscriber and block until SIGTERM or Ctrl+C.
+    Returns:
+        None
+    """
+
+    subscriber = pubsub_v1.SubscriberClient()
+    sub_path = subscriber.subscription_path(PROJECT_ID, SUBSCRIPTION)
+
+    log.info(f"Listening on {sub_path}... (Ctrl+C to stop)")
+    future = subscriber.subscribe(sub_path, callback=_callback)
+
+    # Graceful shutdown on SIGTERM (Cloud Run sends this).
+    signal.signal(signal.SIGTERM, lambda *a: future.cancel())
+
+    try:
+        future.result()
+    except KeyboardInterrupt:
+        future.cancel()
+    except Exception as exc:
+        log.error(f"Stream error: {exc}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

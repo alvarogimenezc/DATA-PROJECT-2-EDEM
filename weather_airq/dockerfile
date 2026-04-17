@@ -1,15 +1,19 @@
-#Creamos una imagen base, ambos scripts necesitan las mismas dependencias!!
-FROM python:3.11-slim AS base  
+# Multi-stage so the same Dockerfile produces TWO images: one for the air
+# quality ingestor and one for the weather ingestor. Same base layer, same
+# requirements, two CMDs.
+#
+# Build:
+#   docker build -t cloudrisk/air-ingestor     --target air     weather_airq/
+#   docker build -t cloudrisk/weather-ingestor --target weather weather_airq/
+FROM python:3.12-slim AS base
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-#Creamos la imagen para el contenedor de la calidad del aire. Ejecuta el script de air_quality.py
-FROM base AS air_quality
-COPY air_quality.py .
-CMD ["python", "-u", "air_quality.py"]
+FROM base AS air
+COPY calidad_aire.py .
+CMD ["python", "-u", "calidad_aire.py"]
 
-#Creamos la imagen para el contenedor del tiempo. Ejecuta el script de weather.py
 FROM base AS weather
-COPY weather.py .
-CMD ["python", "-u", "weather.py"]
+COPY clima.py .
+CMD ["python", "-u", "clima.py"]

@@ -1,0 +1,13 @@
+# ============================================================================
+# terraform.tfvars.example — plantilla publica (SI se sube a git)
+# ============================================================================
+# Copia este fichero a `terraform.tfvars` (gitignored) y rellena los valores.
+# NUNCA comitees `terraform.tfvars` porque contiene el jwt_secret.
+#
+# Como generar un jwt_secret fuerte:
+#   openssl rand -hex 32
+# ============================================================================
+
+project_id = "cloudrisk-492619"
+region     = "europe-west1"
+jwt_secret = "sustituye-esto-por-64-hex-chars-aleatorios-minimo-32"

@@ -1,12 +1,53 @@
+# ============ Node / Frontend ============
+node_modules/
+dist/
+.vite/
+*.local
 .env
-.venv/
-__pycache__/
-*.pyc
-.DS_Store
-secrets/
-*.key.json
+.env.local
+.env.*.local
 
-# Frontend
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
+# ============ Python ============
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ============ Claude Code (local per-user) ============
+.claude/settings.local.json
+.claude/worktrees/
+.claude/plans/
+
+# ============ IDE / OS ============
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# ============ Logs / Temp ============
+*.log
+tmp/
+.tmp/
+
+# ============ GCP / Secrets ============
+*-service-account*.json
+service-account*.json
+credentials.json
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+!*.tfvars.example
+
+# ============ Local run artefacts ============
+data_generator/*.csv
+*.pid
+coverage.xml
+htmlcov/

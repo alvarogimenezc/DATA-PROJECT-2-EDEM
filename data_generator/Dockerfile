@@ -1,16 +1,18 @@
-FROM python:3.11-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libgeos-dev \
-    libproj-dev \
-    proj-data \
-    proj-bin \
-    libgdal-dev \
-    && rm -rf /var/lib/apt/lists/*
+FROM python:3.12-slim
 
 WORKDIR /app
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY main.py .
-CMD ["python", "-u", "main.py"]
+
+COPY . .
+
+ENV CLOUDRISK_LOCAL_METRICS_DIR=/metrics
+
+# Non-root user
+RUN useradd --system --create-home --shell /bin/false app \
+    && mkdir -p /metrics \
+    && chown -R app:app /app /metrics
+USER app
+
+CMD ["python", "-u", "recolector_metricas_local.py"]
