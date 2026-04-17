@@ -1,6 +1,0 @@
-streamlit
-pandas
-google-cloud-bigquery
-db-dtypes
-pyarrow
-requests

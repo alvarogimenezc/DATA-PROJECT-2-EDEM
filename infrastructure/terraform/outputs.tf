@@ -21,11 +21,6 @@ output "web_url" {
   value       = google_cloud_run_v2_service.web.uri
 }
 
-output "dashboard_url" {
-  description = "URL publica del dashboard Streamlit"
-  value       = google_cloud_run_v2_service.dashboard.uri
-}
-
 output "artifact_registry" {
   description = "Prefijo del registry para empujar imagenes Docker"
   value       = "${var.region}-docker.pkg.dev/${var.project_id}/cloudrisk"

@@ -1,6 +1,6 @@
 # docker-compose.yml — CloudRISK local stack with GCP emulators
 #
-# Spins up: Firestore emulator, Pub/Sub emulator, FastAPI, React (dev), Streamlit dashboard.
+# Spins up: Firestore emulator, Pub/Sub emulator, FastAPI (con /analytics), React (dev).
 # Services talk to each other over the internal `cloudrisk-net` network.
 #
 # Usage:
@@ -90,23 +90,9 @@ services:
         condition: service_healthy
     networks: [cloudrisk-net]
 
-  dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
-    container_name: cloudrisk-dashboard
-    environment:
-      PROJECT_ID: cloudrisk-local
-      METRICS_SOURCE: local
-      FIRESTORE_EMULATOR_HOST: firestore-emulator:8200
-      STREAMLIT_SERVER_PORT: 8080
-      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
-    ports:
-      - "8501:8080"
-    depends_on:
-      firestore-emulator:
-        condition: service_healthy
-    networks: [cloudrisk-net]
+# Dashboard Streamlit eliminado: la analítica se sirve ahora como endpoints
+# /api/v1/analytics/* del backend FastAPI y se consume desde la ruta
+# /analytics del frontend React.
 
 networks:
   cloudrisk-net:

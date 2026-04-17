@@ -32,6 +32,8 @@ from pathlib import Path
 
 import requests
 
+from tabla_reglas_inicio import mostrar_tabla_reglas
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("juego_caminante")
 
@@ -306,6 +308,9 @@ def main():
     tokens = login_all()
     bootstrap_power(tokens)
     print(f"Logged in: {', '.join(i['name'] for i in tokens.values())}  (+10k steps each)\n")
+
+    # Nueva partida → setup + tabla de reglas (2 tropas/barrio + 30 pool + pasos del día)
+    mostrar_tabla_reglas(API, tokens)
 
     # Seed 4 walkers at random points inside Valencia.
     walkers = {pid: (rng.uniform(LAT_MIN, LAT_MAX), rng.uniform(LNG_MIN, LNG_MAX))

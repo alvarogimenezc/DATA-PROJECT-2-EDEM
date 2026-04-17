@@ -1587,6 +1587,11 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
   const [zonesError, setZonesError] = useState(false)
   const [targetZone, setTargetZone] = useState('') // for fortify: destination zone id
   const [attackResult, setAttackResult] = useState(null)  // { attacker_rolls, defender_rolls, conquered, ... }
+  const [turn, setTurn] = useState(null)
+  // Gate antes de que el backend rechace el round-trip: leemos /turn/ al
+  // abrir el panel y cada 3 s. Si no es mi turno, mostramos un banner y
+  // desactivamos el botón de acción (evita 403 silenciosos).
+  const isMyTurn = !turn || turn.current_player_id === user?.id
 
   useEffect(() => {
     let cancelled = false
@@ -1607,6 +1612,17 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
     }
     return () => { cancelled = true }
   }, [kind, zone?.id])
+
+  useEffect(() => {
+    let alive = true
+    const poll = async () => {
+      try { const r = await api.get('/api/v1/turn/'); if (alive) setTurn(r.data) }
+      catch { /* turn poll failures shouldn't block the panel */ }
+    }
+    poll()
+    const id = setInterval(poll, 3000)
+    return () => { alive = false; clearInterval(id) }
+  }, [])
 
   const max = kind === 'fortify'
     ? Math.max(0, (zone?.total_armies || 1) - 1) // must leave at least 1
@@ -1747,6 +1763,27 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
 
           <p className="text-white/70 text-sm">{cfg.desc}</p>
 
+          {!isMyTurn && (
+            <div className="px-4 py-3 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs flex items-start gap-2">
+              <span className="text-base leading-none">⏳</span>
+              <span>
+                No es tu turno. Espera a que {turn?.current_player_id ? `${turn.current_player_id.replace(/^demo-player-/, 'jugador ')} ` : ''}
+                termine para {kind === 'attack' ? 'atacar' : kind === 'fortify' ? 'mover tropas' : 'desplegar'}.
+              </span>
+            </div>
+          )}
+
+          {kind === 'deploy' && balance && Number(balance.armies_available || 0) === 0 && (
+            <div className="px-4 py-3 rounded-xl bg-neon-cyan/10 border border-neon-cyan/30 text-neon-cyan text-xs flex items-start gap-2">
+              <span className="text-base leading-none">🚶</span>
+              <span>
+                No tienes tropas disponibles. Camina por la ciudad para ganarlas: cada {' '}
+                500 pasos ={' '}
+                1 army (máx 50 al día).
+              </span>
+            </div>
+          )}
+
           {/* Fortify: zona origen → zona destino */}
           {kind === 'fortify' && (
             <div className="space-y-2">
@@ -1855,7 +1892,12 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            disabled={loading || (kind === 'fortify' && max === 0)}
+            disabled={
+              loading
+              || !isMyTurn
+              || (kind === 'fortify' && max === 0)
+              || (kind === 'deploy' && Number(balance?.armies_available || 0) === 0)
+            }
             onClick={handleAction}
             className="w-full py-4 rounded-2xl font-display font-bold text-white flex items-center justify-center gap-2 disabled:opacity-50"
             style={{
@@ -1865,7 +1907,7 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
             }}
           >
             <Icon className="w-5 h-5" />
-            {loading ? 'Procesando...' : kind === 'attack' ? `LANZAR OFENSIVA` : `${cfg.label} ${amount} TROPAS`}
+            {loading ? 'Procesando...' : !isMyTurn ? 'ESPERA TU TURNO' : kind === 'attack' ? `LANZAR OFENSIVA` : `${cfg.label} ${amount} TROPAS`}
           </motion.button>
         </div>
       </motion.div>

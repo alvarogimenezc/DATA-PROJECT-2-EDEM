@@ -70,15 +70,11 @@ echo "[4/6] Building and pushing Docker images..."
 REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}"
 CODE_DIR="${SCRIPT_DIR}/.."                     # flattened: repo root is one level up
 
-# API
+# API (la analítica está integrada aquí vía endpoints /analytics/*)
 docker build -t "${REGISTRY}/api:latest" "${CODE_DIR}/backend"
 docker push "${REGISTRY}/api:latest"
 
-# Dashboard
-docker build -t "${REGISTRY}/dashboard:latest" "${CODE_DIR}/dashboard"
-docker push "${REGISTRY}/dashboard:latest"
-
-# ─── 5. Deploy API & Dashboard first ─────────────────────────────────────────
+# ─── 5. Deploy API first ─────────────────────────────────────────────────────
 echo "[5/6] Deploying to Cloud Run..."
 
 gcloud run deploy cloudrisk-api \
@@ -90,15 +86,6 @@ gcloud run deploy cloudrisk-api \
   --max-instances=10 \
   --memory=512Mi \
   --service-account="cloudrisk-api@${PROJECT_ID}.iam.gserviceaccount.com"
-
-gcloud run deploy cloudrisk-dashboard \
-  --image="${REGISTRY}/dashboard:latest" \
-  --region="$REGION" \
-  --platform=managed \
-  --allow-unauthenticated \
-  --min-instances=0 \
-  --max-instances=3 \
-  --memory=256Mi
 
 # Get real API URL (Cloud Run URLs are not guessable)
 API_URL=$(gcloud run services describe cloudrisk-api \
@@ -131,7 +118,6 @@ echo "[6/6] Deploy complete!"
 echo ""
 echo "  API       : $(gcloud run services describe cloudrisk-api --region=$REGION --format='value(status.url)')"
 echo "  Frontend  : $(gcloud run services describe cloudrisk-web --region=$REGION --format='value(status.url)')"
-echo "  Dashboard : $(gcloud run services describe cloudrisk-dashboard --region=$REGION --format='value(status.url)')"
 echo ""
 echo "To set up CI/CD trigger:"
 echo "  gcloud builds triggers create github \\"

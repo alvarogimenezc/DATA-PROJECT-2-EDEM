@@ -70,3 +70,65 @@ resource "google_bigquery_table" "environmental_factors" {
     { name = "processed_at",  type = "TIMESTAMP", mode = "REQUIRED", description = "Cuando Dataflow proceso la fila" },
   ])
 }
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ TABLA player_scoring_events                                             │
+# │                                                                         │
+# │ La escribe el stateful DoFn del pipeline unificado por cada evento de   │
+# │ pasos procesado. Incluye velocidad, distancia, multiplicador aplicado,  │
+# │ ejércitos ganados y si tocó el cap diario.                              │
+# └─────────────────────────────────────────────────────────────────────────┘
+resource "google_bigquery_table" "player_scoring_events" {
+  dataset_id = google_bigquery_dataset.cloudrisk.dataset_id
+  table_id   = "player_scoring_events"
+
+  deletion_protection = false
+
+  time_partitioning {
+    type  = "DAY"
+    field = "ts"
+  }
+  clustering = ["player_id"]
+
+  schema = jsonencode([
+    { name = "player_id",          type = "STRING",    mode = "REQUIRED" },
+    { name = "ts",                 type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "latitude",           type = "FLOAT",     mode = "NULLABLE" },
+    { name = "longitude",          type = "FLOAT",     mode = "NULLABLE" },
+    { name = "steps_delta",        type = "INTEGER",   mode = "REQUIRED" },
+    { name = "distance_m",         type = "FLOAT",     mode = "REQUIRED" },
+    { name = "speed_kmh",          type = "FLOAT",     mode = "REQUIRED" },
+    { name = "env_multiplier",     type = "FLOAT",     mode = "REQUIRED" },
+    { name = "rappel_applied",     type = "BOOLEAN",   mode = "REQUIRED" },
+    { name = "armies_earned",      type = "INTEGER",   mode = "REQUIRED" },
+    { name = "armies_today_after", type = "INTEGER",   mode = "REQUIRED" },
+    { name = "capped",             type = "BOOLEAN",   mode = "REQUIRED" },
+    { name = "processed_at",       type = "TIMESTAMP", mode = "REQUIRED" },
+  ])
+}
+
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ TABLA dead_letter                                                       │
+# │                                                                         │
+# │ Mensajes rechazados por el pipeline: JSON inválido, campos faltantes o  │
+# │ velocidad > MAX_SPEED_KMH (anti-trampa). Útil para auditar y depurar.   │
+# └─────────────────────────────────────────────────────────────────────────┘
+resource "google_bigquery_table" "dead_letter" {
+  dataset_id = google_bigquery_dataset.cloudrisk.dataset_id
+  table_id   = "dead_letter"
+
+  deletion_protection = false
+
+  time_partitioning {
+    type  = "DAY"
+    field = "processed_at"
+  }
+
+  schema = jsonencode([
+    { name = "source",       type = "STRING",    mode = "REQUIRED" },
+    { name = "reason",       type = "STRING",    mode = "REQUIRED" },
+    { name = "player_id",    type = "STRING",    mode = "NULLABLE" },
+    { name = "raw_payload",  type = "STRING",    mode = "REQUIRED" },
+    { name = "processed_at", type = "TIMESTAMP", mode = "REQUIRED" },
+  ])
+}

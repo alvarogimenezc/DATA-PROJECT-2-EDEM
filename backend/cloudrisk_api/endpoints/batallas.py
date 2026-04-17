@@ -10,12 +10,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from cloudrisk_api.configuracion import settings
+from cloudrisk_api.configuracion import settings, MIN_GARRISON
 from cloudrisk_api.database import batallas as batallas_repo, zonas as zonas_repo, clanes as clanes_repo, publicador_pubsub as pubsub_publisher
 from cloudrisk_api.services.asesor_ia import get_battle_advice
 from cloudrisk_api.services.autenticacion import get_current_user
 
-router = APIRouter(prefix="/battles", tags=["battles"])
+# /battles/* está marcado deprecated: el sistema canónico de combate es
+# POST /zones/{id}/attack (Risk dice). /battles/* se mantiene sólo para el
+# historial y la resolución programada (Cloud Scheduler) y desaparecerá
+# en la próxima major.
+router = APIRouter(prefix="/battles", tags=["battles"], deprecated=True)
 
 
 class BattleCreate(BaseModel):
@@ -141,7 +145,8 @@ def resolve_battle(
             zonas_repo.update_zone(battle["zone_id"], {
                 "owner_clan_id": battle["attacker_clan_id"],
                 "conquered_at": datetime.utcnow().isoformat(),
-                "defense_level": 0,
+                # Invariante del juego: toda zona propia mantiene >= MIN_GARRISON.
+                "defense_level": MIN_GARRISON,
             })
     else:
         result = "defender_wins"

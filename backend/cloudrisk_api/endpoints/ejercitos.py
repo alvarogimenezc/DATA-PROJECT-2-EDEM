@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from cloudrisk_api.configuracion import settings
+from cloudrisk_api.configuracion import settings, MIN_GARRISON
 from cloudrisk_api.database import usuarios as usuarios_repo, zonas as zonas_repo
 from cloudrisk_api.services.autenticacion import get_current_user
 from cloudrisk_api.services import multiplicadores as multipliers
@@ -142,8 +142,11 @@ def fortify(data: FortifyRequest, current_user: dict = Depends(get_current_user)
         raise HTTPException(status_code=403, detail="No controlas la zona de origen")
 
     from_armies = from_zone.get("defense_level", 0) or 0
-    if data.amount >= from_armies:
-        raise HTTPException(status_code=400, detail="Debes dejar al menos 1 tropa en la zona de origen")
+    if from_armies - data.amount < MIN_GARRISON:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Debes dejar al menos {MIN_GARRISON} tropas en la zona de origen",
+        )
     if data.amount <= 0:
         raise HTTPException(status_code=400, detail="Cantidad inv\u00e1lida")
 

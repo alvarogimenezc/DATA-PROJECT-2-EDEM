@@ -17,6 +17,7 @@ from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from cloudrisk_api.endpoints import (
+    analiticas as analytics,
     ejercitos as armies,
     batallas as battles,
     clanes as clans,
@@ -79,6 +80,7 @@ app.include_router(prefix=api_router.prefix, router=multipliers.router)
 app.include_router(prefix=api_router.prefix, router=turn.router)
 app.include_router(prefix=api_router.prefix, router=team_compat.router)
 app.include_router(prefix=api_router.prefix, router=missions.router)
+app.include_router(prefix=api_router.prefix, router=analytics.router)
 
 
 def _run_startup_seed() -> None:
