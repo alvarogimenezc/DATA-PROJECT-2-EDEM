@@ -15,7 +15,7 @@ Documento vivo con quién hace qué. Se actualiza cada vez que cambia el scope d
 | 5 | API Weather (ingesta) | **Álvaro** | 👷 En curso | Contenedor en `weather_airq/`, publicará a topic `weather` |
 | 6 | Pipeline Dataflow / Apache Beam (lógica del juego) | **Noelia + Martha** | 🟢 Listo en local | Lee Pub/Sub, aplica multiplicadores aire/clima, escribe a Firestore + BigQuery. Esperando acceso GCP |
 | 7 | Backend API (acciones de usuario) | **Fran** | ✅ Hecho | FastAPI **con arquitectura en capas** (`cloudrisk_api/endpoints/` + `cloudrisk_api/database/` + `config.py`). Endpoints en `/api/v1/...` |
-| 8 | Frontend (mapa + panel) | **Ricardo** | 👷 En curso | React/Streamlit, consume el backend de Fran |
+| 8 | Frontend (mapa + panel) | **Ricardo** | ✅ Hecho | SPA React 18 + Vite + MapLibre GL. Mapa 3D de Valencia, dashboard, misiones y leaderboard. Consume el backend de Fran vía HTTP + WebSocket. |
 | 9 | Deploy a Cloud Run (scripts + Cloud Run Job walker) | **Fran** | ✅ Preparado | `CICD/desplegar_manual.sh`, idempotente |
 | 10 | CI/CD Cloud Build (estilo profe) | **Fran** | ✅ Preparado | `CICD/desplegar_backend_auto.yml` y `CICD/desplegar_walker_auto.yml`. Trigger automático con `gcloud builds triggers create github` |
 

@@ -92,7 +92,10 @@ origen (host)        destino (contenedor)  modo
 ### 1. `${ADC_PATH}` — origen (en TU máquina)
 Docker Compose sustituye esta variable con lo que tengas en tu `.env`. Ejemplo:
 ```
-C:/Users/franc/AppData/Roaming/gcloud/application_default_credentials.json
+# Linux/Mac:
+/home/TU_USUARIO/.config/gcloud/application_default_credentials.json
+# Windows:
+C:/Users/TU_USUARIO/AppData/Roaming/gcloud/application_default_credentials.json
 ```
 Es el JSON que generó `gcloud auth application-default login`.
 
@@ -126,6 +129,57 @@ Es como crear un acceso directo dentro del contenedor que apunta a un archivo tu
 - `/scripts` — **Comandos sueltos** que el equipo ejecuta a mano (crear tablas BQ, probar endpoints con curl, deploy manual).
 - `/cicd` — **Plantillas de Cloud Build** que se ejecutan automáticamente con `git push` (deploy a Cloud Run).
 - `/docs` — Documentación extendida.
+
+---
+
+## 🎮 Frontend
+
+SPA React 18 + Vite + MapLibre GL que muestra el mapa 3D de Valencia con los distritos del juego, panel de stats, misiones y leaderboard.
+
+### Arrancar en desarrollo local
+
+```bash
+cd frontend
+npm install
+cp .env.example .env      # edita con la URL del backend
+npm run dev               # http://localhost:3000
+```
+
+### Variables de entorno
+
+| Variable | Descripción | Ejemplo |
+|---|---|---|
+| `VITE_API_URL` | URL base del backend (HTTP) | `http://localhost:8080` |
+| `VITE_WS_URL` | URL del WebSocket del backend | `ws://localhost:8080` |
+
+En producción Vite "hornea" estos valores en el bundle durante `npm run build`. Se pasan como `--build-arg` al Dockerfile.
+
+### Build + Docker local
+
+```bash
+cd frontend
+docker build \
+  --build-arg VITE_API_URL=http://localhost:8080 \
+  --build-arg VITE_WS_URL=ws://localhost:8080 \
+  -t frontend:dev .
+docker run --rm -p 3000:8080 frontend:dev
+# → http://localhost:3000
+```
+
+### Deploy a Cloud Run
+
+```bash
+gcloud builds submit frontend/ \
+  --tag europe-west1-docker.pkg.dev/cloudrisk-492619/cloudrisk/frontend:latest \
+  --project cloudrisk-492619
+
+gcloud run deploy cloudrisk-frontend \
+  --image europe-west1-docker.pkg.dev/cloudrisk-492619/cloudrisk/frontend:latest \
+  --region europe-west1 \
+  --allow-unauthenticated \
+  --port 8080 \
+  --project cloudrisk-492619
+```
 
 ---
 
