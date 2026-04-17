@@ -9,9 +9,10 @@
 # │ Los metes en Secret Manager. Cloud Run los lee en runtime via IAM.      │
 # │ Cada secreto tiene VERSIONES — puedes rotarlo sin downtime.             │
 # │                                                                         │
-# │ Nosotros manejamos 2 secretos:                                          │
+# │ Nosotros manejamos 3 secretos:                                          │
 # │   1) cloudrisk-jwt-secret   -> firma tokens JWT del backend             │
 # │   2) openweather-api-key    -> clave para llamar a OpenWeatherMap       │
+# │   3) scheduler-secret       -> token compartido Scheduler <-> backend   │
 # │                                                                         │
 # │ Coste: 0.06$ por secreto al mes. Despreciable.                          │
 # └─────────────────────────────────────────────────────────────────────────┘
@@ -59,4 +60,30 @@ resource "google_secret_manager_secret" "owm_api_key" {
   }
 
   depends_on = [google_project_service.apis]
+}
+
+# --------- SECRET 3: Scheduler token ---------------------------------------
+# Compartido entre Cloud Scheduler (cron en `09_scheduler.tf`) y el backend
+# (`turno.py`, `batallas.py`, `multiplicadores.py` validan el header
+# `X-Scheduler-Token` contra `settings.SCHEDULER_SECRET`). En modo
+# USE_LOCAL_STORE=1 el backend salta la validación — así tests y dev local
+# no necesitan el token.
+resource "google_secret_manager_secret" "scheduler_secret" {
+  secret_id = "scheduler-secret"
+
+  replication {
+    auto {}
+  }
+
+  labels = {
+    app   = "cloudrisk"
+    owner = "fran"
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_secret_manager_secret_version" "scheduler_secret_v1" {
+  secret      = google_secret_manager_secret.scheduler_secret.id
+  secret_data = var.scheduler_secret # viene de terraform.tfvars
 }

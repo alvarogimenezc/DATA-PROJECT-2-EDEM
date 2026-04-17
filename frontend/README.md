@@ -43,8 +43,9 @@ Se despliega como **Cloud Run Service** (`cloudrisk-web`) detrás de un `nginx` 
 frontend/  ──(HTTP REST)──▶  backend/  (/auth, /zones, /clans, /armies, /battles, /turn, /analytics)
            ──(WebSocket)──▶  backend/  (eventos live: conquest, battle-start)
 
-Build time: Cloud Build inyecta VITE_API_URL y VITE_WS_URL tras deploy del backend
-            (ver CICD/cloudbuild.yaml paso `get-api-url`)
+Build time: Al construir la imagen (`gcloud builds submit frontend/ --tag ...`)
+            se pasan VITE_API_URL y VITE_WS_URL como build-args. Vite los
+            hornea en el bundle. Obtener la URL del API: `terraform output -raw api_url`.
 
 Runtime:    nginx sirve el bundle en :8080  ──▶  Cloud Run Service cloudrisk-web
 ```
@@ -74,8 +75,14 @@ docker build \
   -t cloudrisk-frontend ./frontend
 docker run --rm -p 8080:8080 cloudrisk-frontend
 
-# Deploy manual a Cloud Run (el script del equipo pasa VITE_API_URL por build-arg)
-bash CICD/desplegar_manual.sh frontend
+# Deploy manual a Cloud Run — build + deploy en dos pasos
+API_URL=$(cd ../infrastructure/terraform && terraform output -raw api_url)
+gcloud builds submit frontend/ \
+  --tag europe-west1-docker.pkg.dev/$PROJECT_ID/cloudrisk/frontend:latest \
+  --substitutions=_VITE_API_URL=$API_URL,_VITE_WS_URL=${API_URL/https:/wss:}
+gcloud run deploy cloudrisk-web \
+  --image europe-west1-docker.pkg.dev/$PROJECT_ID/cloudrisk/frontend:latest \
+  --region europe-west1 --platform managed --allow-unauthenticated
 ```
 
 Variables de entorno (inyectadas **en build**, no runtime — Vite las hornea en el bundle):

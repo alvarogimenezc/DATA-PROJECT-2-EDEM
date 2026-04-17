@@ -7,13 +7,10 @@
 #   docker compose up --build
 #
 # Exposed ports:
-#   8080  → API            (http://localhost:8080/api/v1/docs)
-#   3000  → Frontend (Vite dev with HMR)
-#   8501  → Dashboard      (Streamlit)
+#   8080  → API            (http://localhost:8080/api/v1/docs  incl. /analytics/*)
+#   3000  → Frontend (Vite dev with HMR, incl. /analytics)
 #   8200  → Firestore emulator (REST)
 #   8085  → Pub/Sub emulator
-#
-# For a no-Docker fallback, see docs/QUICKSTART.md.
 
 name: cloudrisk
 

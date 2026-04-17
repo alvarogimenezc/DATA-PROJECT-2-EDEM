@@ -2,7 +2,7 @@
 
 ## 🎯 Qué hace este directorio
 
-Es el **cajón de herramientas** del proyecto. Scripts que no son ni infra (eso es `infrastructure/`) ni CI/CD (eso es `CICD/`), pero que necesitamos para operar el sistema en dev y demos:
+Es el **cajón de herramientas** del proyecto. Scripts que no son infra (eso es `infrastructure/`) pero que necesitamos para operar el sistema en dev y demos:
 
 - **Sembrar** Firestore con jugadores, zonas, batallas, balances.
 - **Jugar automáticamente** una partida contra el API para que la demo tenga "chicha".
@@ -43,8 +43,7 @@ scripts/sembrar_demo.py
 
 scripts/play_demo_game.sh ──▶ backend/ (HTTP: /auth, /clans, /armies, /zones)
 
-CICD/sembrar_demo.sh        ──▶ scripts/sembrar_demo.py   (wrapper)
-CICD/verificar_demo.sh      ──▶ lee Firestore y valida el seed
+infrastructure/terraform/10_demo_seed.tf ──▶ scripts/sembrar_demo.py (automático tras apply)
 
 Lee de:
   data/demo_game_state.json         (estado precocinado)
@@ -56,7 +55,7 @@ Lee de:
 
 1. `bash scripts/bootstrap_demo.sh cloudrisk-492619` (o `.ps1` en Windows)
 2. `bash scripts/play_demo_game.sh` (solo si quieres estado "a mitad de partida" con clanes)
-3. `bash CICD/verificar_demo.sh` para confirmar que todo entró
+3. `python scripts/sembrar_demo.py --project cloudrisk-492619 --dry-run` para confirmar que todo entró (compara contra Firestore sin escribir)
 
 ## 🚀 Cómo ejecutarlo
 

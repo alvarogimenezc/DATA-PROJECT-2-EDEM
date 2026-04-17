@@ -45,6 +45,19 @@ variable "jwt_secret" {
   sensitive   = true
 }
 
+# -----------------------------------------------------------------------------
+# scheduler_secret: token compartido entre Cloud Scheduler y el backend para
+# endpoints internos (/turn/setup, /battles/resolve-expired, /multipliers/reset).
+# Lo manda Scheduler en el header X-Scheduler-Token; el backend compara con este
+# valor cargado desde Secret Manager. En modo USE_LOCAL_STORE=1 el backend salta
+# la validación para que los tests y el dev local no necesiten el token.
+# -----------------------------------------------------------------------------
+variable "scheduler_secret" {
+  description = "Token compartido con Cloud Scheduler para endpoints internos"
+  type        = string
+  sensitive   = true
+}
+
 # ─── Parámetros del pipeline unificado (stateful DoFn) ──────────────────────
 # Consumidos por el job Dataflow. Cámbialos sin re-deploy del pipeline: el
 # runtime lee estos valores del parameters{} del flex template job.
