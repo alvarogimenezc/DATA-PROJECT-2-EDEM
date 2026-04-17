@@ -1,0 +1,30 @@
+# .gitattributes — tells GitHub Linguist how to classify files.
+# Affects the colored language bar on the repo homepage.
+
+# ─── Notebooks are documentation, not code ──────────────────────────────
+*.ipynb         linguist-documentation
+
+# ─── Teaching markdown shouldn't dominate the language stats ────────────
+notebooks/**    linguist-documentation
+docs/**         linguist-documentation
+
+# ─── Generated / vendored artefacts — exclude from stats + diff view ────
+frontend/dist/**          linguist-generated
+frontend/package-lock.json linguist-generated
+*.min.js                   linguist-generated
+*.min.css                  linguist-generated
+
+# ─── Line endings — checked-in files use LF; Windows devs don't suffer ─
+* text=auto eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# ─── Binary assets — treat as such (no line-ending conversion) ─────────
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.svg binary

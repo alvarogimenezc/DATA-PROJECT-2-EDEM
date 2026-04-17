@@ -1,0 +1,20 @@
+{
+  "_comment": "Feed de random_tracker FAKE para tests locales. El fetcher lo consume con --local-file data/mock_tracker_feed.json. Contiene una mañana de paseo real por Valencia (Cabañal → Playa Malvarrosa) de Fran.",
+  "user": "francisco",
+  "date": "2026-04-16",
+  "total_distance_meters": 4820.3,
+  "total_duration_seconds": 3420.5,
+  "average_speed_mps": 1.41,
+  "movements": [
+    { "timestamp": "2026-04-16T07:30:00Z", "latitude": 39.4780, "longitude": -0.3300, "speed_mps": 0.0 },
+    { "timestamp": "2026-04-16T07:32:00Z", "latitude": 39.4785, "longitude": -0.3295, "speed_mps": 1.2, "step_count": 150 },
+    { "timestamp": "2026-04-16T07:35:00Z", "latitude": 39.4792, "longitude": -0.3280, "speed_mps": 1.4, "step_count": 420 },
+    { "timestamp": "2026-04-16T07:40:00Z", "latitude": 39.4800, "longitude": -0.3260, "speed_mps": 1.5, "step_count": 780 },
+    { "timestamp": "2026-04-16T07:45:00Z", "latitude": 39.4810, "longitude": -0.3240, "speed_mps": 1.4, "step_count": 1150 },
+    { "timestamp": "2026-04-16T07:50:00Z", "latitude": 39.4820, "longitude": -0.3220, "speed_mps": 1.5, "step_count": 1530 },
+    { "timestamp": "2026-04-16T08:00:00Z", "latitude": 39.4840, "longitude": -0.3200, "speed_mps": 1.5, "step_count": 2200 },
+    { "timestamp": "2026-04-16T08:15:00Z", "latitude": 39.4870, "longitude": -0.3180, "speed_mps": 1.3, "step_count": 3100 },
+    { "timestamp": "2026-04-16T08:30:00Z", "latitude": 39.4900, "longitude": -0.3200, "speed_mps": 1.0, "step_count": 3800 },
+    { "timestamp": "2026-04-16T08:45:00Z", "latitude": 39.4920, "longitude": -0.3220, "speed_mps": 0.8, "step_count": 4350 }
+  ]
+}

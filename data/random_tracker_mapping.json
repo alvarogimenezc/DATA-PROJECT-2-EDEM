@@ -1,0 +1,10 @@
+{
+  "_comment": "Mapea identificadores del repo FranciscoAlvarezVaras/random_tracker a player_id de CloudRISK. La clave es el nombre de usuario del tracker (o la clave 'user' dentro del JSON). El valor es el documento users/<id> de Firestore. La entrada '*' es el fallback: si un movement no trae 'user', se le asigna ese player_id por defecto.",
+  "*": "demo-player-001",
+  "francisco": "demo-player-001",
+  "FranciscoAlvarezVaras": "demo-player-001",
+  "alvaro": "demo-player-002",
+  "noelia": "demo-player-003",
+  "martha": "demo-player-003",
+  "ricardo": "demo-player-004"
+}

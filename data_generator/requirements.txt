@@ -1,3 +1,7 @@
-google-cloud-pubsub==2.23.0
-osmnx==1.9.4
-networkx==3.3
+apache-beam[gcp]==2.62.0
+google-cloud-firestore==2.23.0
+google-cloud-pubsub==2.34.0
+osmnx>=1.9.0
+networkx>=3.0
+shapely>=2.0.0
+requests==2.32.3

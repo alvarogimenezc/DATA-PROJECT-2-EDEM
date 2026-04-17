@@ -1,324 +1,1067 @@
-# CloudRisk 492619 — Guía de Inicio Rápido 🚀
+# CloudRISK — Serverless Urban Conquest
 
-Proyecto de microservicios orquestado con **Docker Compose** y autenticado contra GCP mediante **ADC (Application Default Credentials)**.
+> **Camina Valencia. Cada paso es munición. Conquista los 87 barrios.**
+> Proyecto 100 % **serverless** sobre Google Cloud Platform.
+>
+> **Case study** del curso *Serverless Data Processing* — misma metodología
+> que el repo del profesor [`jabrio/Serverless_EDEM_2026`](https://github.com/jabrio/Serverless_EDEM_2026).
 
-## 🛠 Requisitos previos
+[![CI](https://github.com/RicardoEdreiraPenas/DTP2-SAFE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RicardoEdreiraPenas/DTP2-SAFE/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.12-blue)
+![Node](https://img.shields.io/badge/node-20-brightgreen)
+![GCP](https://img.shields.io/badge/cloud-GCP-4285F4)
+![Terraform](https://img.shields.io/badge/iac-terraform-7B42BC)
 
-- [Docker & Docker Compose](https://www.docker.com/)
-- [Google Cloud SDK (gcloud CLI)](https://cloud.google.com/sdk/docs/install)
+**Máster Big Data & Cloud · EDEM 2025/2026 · Serverless Computing**
+**Prof. Javi Briones** · [`github.com/jabrio/Serverless_EDEM_2026`](https://github.com/jabrio/Serverless_EDEM_2026)
+**Repo del equipo (destino final):** [`alvarogimenezc/DATA-PROJECT-2-EDEM`](https://github.com/alvarogimenezc/DATA-PROJECT-2-EDEM)
 
 ---
 
-## 🔐 Configuración de acceso (solo la primera vez)
+## Índice
 
-### 1. Solicitar acceso al proyecto GCP
-Pide al admin del proyecto `cloudrisk-492619` que te añada con rol Editor:
+1. [Qué es CloudRISK](#1-qué-es-cloudrisk)
+2. [Arquitectura serverless](#2-arquitectura-serverless)
+3. [Mapa a los 13 temas del curso](#3-mapa-a-los-13-temas-del-curso)
+4. [Quién hace qué (equipo de 5)](#4-quién-hace-qué-equipo-de-5)
+5. [Arranque rápido en local](#5-arranque-rápido-en-local)
+6. [Despliegue a GCP paso a paso](#6-despliegue-a-gcp-paso-a-paso) ⭐
+7. [Cómo recibimos datos en tiempo real (random_tracker + demo seed)](#7-cómo-recibimos-datos-en-tiempo-real-random_tracker--demo-seed) ⭐⭐
+8. [Terraform: qué hace cada archivo](#8-terraform-qué-hace-cada-archivo)
+9. [Firestore — esquema y contrato](#9-firestore--esquema-y-contrato)
+10. [Backup y restore de Firestore](#10-backup-y-restore-de-firestore)
+11. [Demo accounts + comandos de dev](#11-demo-accounts--comandos-de-dev)
+12. [CI/CD con Cloud Build](#12-cicd-con-cloud-build)
+13. [Fusión con el repo del equipo](#13-fusión-con-el-repo-del-equipo)
+14. [Runbook de incidencias comunes](#14-runbook-de-incidencias-comunes)
+15. [Checklist de entrega](#15-checklist-de-entrega)
 
-```bash
-# Lo ejecuta el admin:
-gcloud projects add-iam-policy-binding cloudrisk-492619 \
-  --member=user:tu-email@gmail.com \
-  --role=roles/editor
+---
+
+## 1. Qué es CloudRISK
+
+Juego de estrategia geolocalizado tipo *Risk* sobre los 87 barrios de Valencia,
+construido como pipeline de datos **100 % serverless**:
+
+```
+Walker (Cloud Run Job)          ─► Pub/Sub: player-movements ─┐
+Air ingestor (Cloud Run)        ─► Pub/Sub: air-quality      ─┤
+Weather ingestor (Cloud Run)    ─► Pub/Sub: weather          ─┤
+                                                                ▼
+                              Dataflow (streaming, Apache Beam)
+                                         │
+                    ┌────────────────────┴────────────────────┐
+                    ▼                                         ▼
+              BigQuery (analytics)                  Firestore (operativo)
+                    ▲                                         ▲
+                    └──────── Backend FastAPI (Cloud Run) ────┘
+                                         ▲
+                                         │
+                              Frontend React + MapLibre 3D
 ```
 
-### 2. Autenticación local
-En tu terminal:
+Ni un solo recurso "encendido" siempre. Todo escala a cero. Coste con 10 partidas/día: **< 3 €/mes**.
+
+---
+
+## 2. Arquitectura serverless
+
+**Regla:** ni un solo recurso "encendido" siempre. Todo escala a cero y paga por uso.
+
+| Componente | Servicio GCP | Escala a cero | Coste idle |
+|---|---|:---:|:---:|
+| Walker (bot de pasos) | Cloud Run **Job** | sí | 0 € |
+| Ingestores (air, weather) | Cloud Run Service (`min-instances=1`) | no | ~1 €/mes cada uno |
+| Backend FastAPI | Cloud Run Service | sí | 0 € |
+| Frontend React | Cloud Run Service | sí | 0 € |
+| Dashboard Streamlit | Cloud Run Service | sí | 0 € |
+| BD operativa | **Firestore Native** | — | 0 € hasta 1 GB |
+| Analytics | **BigQuery** | — | 0 € hasta 1 TB queries/mes |
+| Eventos | **Pub/Sub** | — | 0 € hasta 10 GB/mes |
+| Streaming | **Dataflow** (autoscale) | sí (0 workers) | 0 € sin mensajes |
+| Secretos | **Secret Manager** | — | 0.06 $/versión/mes |
+| Build | **Cloud Build** | sí | 0 € |
+| Registry | **Artifact Registry** | — | 0 € hasta 0.5 GB |
+
+**Por qué esto importa para el temario:**
+
+- Pub/Sub → evento desacoplado productor/consumidor
+- Cloud Run Service vs Job → stateless vs batch
+- Dataflow → streaming processing sin gestionar cluster
+- BigQuery → columnar analytics sin infra
+- Firestore → NoSQL operativo con índices automáticos
+
+---
+
+## 3. Mapa a los 13 temas del curso
+
+Este proyecto **aplica uno a uno los 13 temas** que imparte Javi Briones en
+[`Serverless_EDEM_2026/GCP`](https://github.com/jabrio/Serverless_EDEM_2026/tree/main/GCP):
+
+| # | Tema del curso | Servicio GCP | Dónde en CloudRISK |
+|---|---|---|---|
+| 1 | Pub/Sub | `pubsub.googleapis.com` | 3 topics: `player-movements`, `air-quality`, `weather` |
+| 2 | Apache Beam + Dataflow | `dataflow.googleapis.com` | `pipelines/ambiental_a_bq.py` |
+| 3 | Cloud Run | `run.googleapis.com` | 5 services + 1 job (walker) |
+| 4 | Cloud Functions | `cloudfunctions.googleapis.com` | documentado (no usado — explicamos por qué) |
+| 5 | CI/CD (Cloud Build) | `cloudbuild.googleapis.com` | `CICD/cloudbuild.yaml` |
+| 6 | Firestore | `firestore.googleapis.com` | 4 colecciones (contrato + extendido) |
+| 7 | Cloud Storage | `storage.googleapis.com` | bucket staging Dataflow + tfstate |
+| 8 | Secret Manager | `secretmanager.googleapis.com` | `cloudrisk-jwt-secret`, `openweather-api-key` |
+| 9 | Artifact Registry | `artifactregistry.googleapis.com` | repo `cloudrisk` con 5 imágenes |
+| 10 | Eventarc | `eventarc.googleapis.com` | documentado (no usado — explicamos por qué) |
+| 11 | Terraform (homework) | — | `infrastructure/terraform/` (9 archivos) |
+| 12 | Vision AI | `vision.googleapis.com` | ❌ no aplicable (sin imágenes de usuario) |
+| 13 | Logging / Monitoring | `logging.googleapis.com` | Cloud Run + Dataflow logs centralizados |
+
+El recorrido completo vive en [`notebooks/00_PROYECTO_COMPLETO.ipynb`](./notebooks/00_PROYECTO_COMPLETO.ipynb).
+
+---
+
+## 4. Quién hace qué (equipo de 5)
+
+Cada miembro tiene **su propio notebook** con el formato `🎯 Lo que haces / 💡 Lo que hace / ✅ Lo que ves` del profesor Javi Briones:
+
+| Miembro | Notebook | Componente | Topics Pub/Sub |
+|---|---|---|---|
+| **Fran** | [`notebooks/01_fran_walker_backend_infra.ipynb`](./notebooks/01_fran_walker_backend_infra.ipynb) | Walker + Backend FastAPI + Infra + CI/CD | `player-movements` |
+| **Álvaro** | [`notebooks/02_alvaro_ingestion.ipynb`](./notebooks/02_alvaro_ingestion.ipynb) | Air + Weather ingestors | `air-quality`, `weather` |
+| **Noelia + Martha** | [`notebooks/03_noelia_martha_pipeline.ipynb`](./notebooks/03_noelia_martha_pipeline.ipynb) | Dataflow / Apache Beam | *(consume los 3)* |
+| **Ricardo** | [`notebooks/04_ricardo_frontend.ipynb`](./notebooks/04_ricardo_frontend.ipynb) | Frontend React + MapLibre | *(cliente HTTP)* |
+
+**Master para todos:** [`notebooks/00_PROYECTO_COMPLETO.ipynb`](./notebooks/00_PROYECTO_COMPLETO.ipynb)
+**Adaptación al repo del equipo (6 PRs):** [`notebooks/05_adaptar_al_equipo.ipynb`](./notebooks/05_adaptar_al_equipo.ipynb)
+**Anatomía línea-a-línea del proyecto:** [`notebooks/06_ANATOMIA_DEL_PROYECTO.ipynb`](./notebooks/06_ANATOMIA_DEL_PROYECTO.ipynb) ⭐
+**Cómo correr los notebooks:** [`notebooks/SETUP_JUPYTER.md`](./notebooks/SETUP_JUPYTER.md)
+
+---
+
+## 5. Arranque rápido en local
+
+### Requisitos
+
+- Python 3.12 (**no 3.13** — Apache Beam no lo soporta)
+- Node 20
+- Docker Desktop (opcional pero recomendado)
+- `gcloud` CLI ([install](https://cloud.google.com/sdk/docs/install))
+
+### Opción A — Docker Compose (1 comando, todo arriba)
 
 ```bash
-# Login en el navegador
-gcloud auth login
+git clone https://github.com/RicardoEdreiraPenas/DTP2-SAFE.git
+cd DTP2-SAFE
+cp .env.example .env
+docker compose up --build
+```
 
-# Generar credenciales ADC para aplicaciones
-gcloud auth application-default login
+- Frontend → http://localhost:3000
+- API docs → http://localhost:8080/api/v1/docs
+- Dashboard → http://localhost:8501
 
-# Fijar el proyecto
+### Opción B — Sin Docker (dev local, 3 terminales)
+
+```bash
+# Terminal 1 — Backend con store en memoria
+cd backend
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+USE_LOCAL_STORE=1 SECRET_KEY=dev python -m uvicorn cloudrisk_api.main:app --port 8080
+```
+
+```bash
+# Terminal 2 — Frontend
+cd frontend
+npm ci
+npm run dev                    # http://localhost:3000
+```
+
+```bash
+# Terminal 3 — Simulador de partida (opcional)
+python data_generator/bot_ia_riesgo.py --interval 5
+```
+
+---
+
+## 6. Despliegue a GCP paso a paso
+
+> **Este es el flujo que queremos dominar.** Combina la **metodología de Terraform
+> de Apepo** (infra como código, `init / plan / apply`) con los **comandos `gcloud`
+> directos de Javi Briones** (`artifacts / builds / run deploy`) para el deploy
+> de imágenes. Cada paso explica **qué vas a teclear, qué vas a ver y por qué**.
+>
+> Se ejecuta una sola vez para levantar todo. Luego el CI/CD actualiza los
+> servicios con cada `git push`. **No usamos `make`** — sólo Terraform + gcloud
+> + scripts bash en `CICD/`.
+
+### 6.1 — Prepara tu máquina (una sola vez)
+
+#### 🎯 Haces esto
+```bash
+# Instala gcloud CLI si no lo tienes
+curl https://sdk.cloud.google.com | bash && exec -l $SHELL
+
+# Instala Terraform (>= 1.8)
+# macOS:   brew install terraform
+# Linux:   https://developer.hashicorp.com/terraform/install
+# Windows: choco install terraform
+
+# Login con tu cuenta Google
+gcloud auth login                         # te abre el navegador para tu cuenta EDEM
+gcloud auth application-default login     # credenciales para clientes (Python, Terraform)
+
+# Apunta al proyecto del equipo
 gcloud config set project cloudrisk-492619
 ```
 
----
-
-## 🏗 Configuración del entorno
-
-### 1. Clonar el repo
-```bash
-git clone <URL-DEL-REPO>
-cd <NOMBRE-DEL-REPO>
+#### 👀 Ves esto
+```
+You are now logged in as [francisco92varas@gmail.com].
+Updated property [core/project].
 ```
 
-### 2. Variables de entorno
-```bash
-cp .env.example .env
-```
-
-Abre `.env` y rellena `ADC_PATH` con la ruta al JSON que generó `gcloud` en el paso anterior:
-
-- **Linux/Mac:** `/home/TU_USUARIO/.config/gcloud/application_default_credentials.json`
-- **Windows:** `C:/Users/TU_USUARIO/AppData/Roaming/gcloud/application_default_credentials.json`
+#### 💡 Por qué
+- `gcloud auth login` → identidad humana en el CLI (para comandos como `gcloud run deploy`).
+- `gcloud auth application-default login` → escribe `~/.config/gcloud/application_default_credentials.json`, que los SDK de Python (`google-cloud-firestore`, `bigquery`) y **Terraform** leen automáticamente. Sin esto, los scripts de seed y `terraform apply` fallan con `DefaultCredentialsError`.
+- Son **dos logins distintos** — una molestia del primer día, nunca más.
 
 ---
 
-## 🚀 Ejecución del proyecto
+### 6.2 — Crea el bucket para el Terraform state (una sola vez)
 
+#### 🎯 Haces esto
 ```bash
-docker compose up --build
+gsutil mb -l europe-west1 gs://cloudrisk-492619-tfstate
+gsutil versioning set on gs://cloudrisk-492619-tfstate
 ```
 
-Docker montará automáticamente tus credenciales dentro de los contenedores, y las apps podrán hablar con **Firestore**, **BigQuery** y **Pub/Sub** de forma segura usando tu identidad.
-
-Para parar todo:
-```bash
-docker compose down
+#### 👀 Ves esto
 ```
+Creating gs://cloudrisk-492619-tfstate/...
+Enabling versioning for gs://cloudrisk-492619-tfstate/...
+```
+
+#### 💡 Por qué
+- `gsutil mb` (**m**ake **b**ucket) → el **state** de Terraform es un JSON que describe qué recursos existen. Si vive en tu portátil y lo pierdes → Terraform "olvida" todo y duplica recursos en GCP (coste real). **En GCS es compartido entre todos los del equipo**.
+- `versioning` → cada `terraform apply` crea una nueva versión del state. Si alguien rompe algo, revertimos al state de hace 1 minuto.
+- **Se crea con `gsutil`, no con Terraform** — es el clásico problema del huevo y la gallina (Terraform no puede crear el bucket donde va a guardar su propio state).
 
 ---
 
-## 🔍 ¿Qué significa `${ADC_PATH}:/tmp/adc.json:ro`?
+### 6.3 — Rellena `terraform.tfvars`
 
-En el `docker-compose.yml` verás esta línea en los servicios:
-
-```yaml
-volumes:
-  - ${ADC_PATH}:/tmp/adc.json:ro
-```
-
-Es un **bind mount**: monta un archivo de tu máquina dentro del contenedor. Se lee en 3 partes separadas por `:`
-
-```
-${ADC_PATH}         :  /tmp/adc.json    :  ro
-    ↑                       ↑               ↑
-origen (host)        destino (contenedor)  modo
-```
-
-### 1. `${ADC_PATH}` — origen (en TU máquina)
-Docker Compose sustituye esta variable con lo que tengas en tu `.env`. Ejemplo:
-```
-# Linux/Mac:
-/home/TU_USUARIO/.config/gcloud/application_default_credentials.json
-# Windows:
-C:/Users/TU_USUARIO/AppData/Roaming/gcloud/application_default_credentials.json
-```
-Es el JSON que generó `gcloud auth application-default login`.
-
-### 2. `/tmp/adc.json` — destino (dentro del contenedor)
-Dentro del contenedor, ese mismo archivo aparece como si estuviera en `/tmp/adc.json`. Es una ruta virtual que solo existe dentro del contenedor. Por eso en el `.env` tienes:
-```
-GOOGLE_APPLICATION_CREDENTIALS=/tmp/adc.json
-```
-Las librerías de Google (`google-cloud-pubsub`, `firestore`, `bigquery`, etc.) leen esa variable y abren ese path → encuentran tu JSON real → se autentican con tu cuenta Google.
-
-### 3. `ro` — read-only
-El contenedor **solo puede leer** el archivo, nunca modificarlo ni borrarlo. Es una protección: si el código se vuelve loco, no puede corromper tus credenciales reales.
-
-### Analogía
-Es como crear un acceso directo dentro del contenedor que apunta a un archivo tuyo. El contenedor "ve" el archivo sin que tengas que copiarlo, y **cada compañero monta el suyo propio** → cada uno usa su identidad de Google sin compartir nada.
-
-### Por qué así y no metiendo el JSON en la imagen
-- **Seguridad**: la imagen Docker es portable/compartible; si metieras el JSON dentro, lo regalarías al mundo.
-- **Flexibilidad**: cada compañero tiene su propio ADC en un path distinto → con `${ADC_PATH}` cada uno pone el suyo en `.env` sin tocar el `docker-compose.yml`.
-
----
-
-## 📂 Estructura del proyecto
-
-- `/data_generator` — **Walker**: simula un jugador caminando por Valencia y publica posiciones a Pub/Sub.
-- `/consumer` — Lector PULL de Pub/Sub (solo debug, imprime por pantalla).
-- `/backend` — **API REST (FastAPI)** con la lógica de negocio del juego (estado del jugador, acciones sobre zonas).
-- `/frontend` — Interfaz de usuario (Ricardo).
-- `/weather_airq` — Ingestores de calidad del aire y tiempo (Álvaro).
-- `/pipelines` — Pipeline Dataflow / Beam (Noelia + Martha).
-- `/scripts` — **Comandos sueltos** que el equipo ejecuta a mano (crear tablas BQ, probar endpoints con curl, deploy manual).
-- `/cicd` — **Plantillas de Cloud Build** que se ejecutan automáticamente con `git push` (deploy a Cloud Run).
-- `/docs` — Documentación extendida.
-
----
-
-## 🎮 Frontend
-
-SPA React 18 + Vite + MapLibre GL que muestra el mapa 3D de Valencia con los distritos del juego, panel de stats, misiones y leaderboard.
-
-### Arrancar en desarrollo local
-
+#### 🎯 Haces esto
 ```bash
-cd frontend
-npm install
-cp .env.example .env      # edita con la URL del backend
-npm run dev               # http://localhost:3000
+cd infrastructure/terraform
+cp terraform.tfvars.example terraform.tfvars
+
+# Genera un jwt_secret fuerte (cross-platform, funciona en Windows también)
+python -c "import secrets; print(secrets.token_hex(32))"
+# -> e3f2a1c9...64 hex chars...b8d7
+
+# Abre terraform.tfvars con tu editor y pega el secret
 ```
 
-### Variables de entorno
+#### 👀 Ves esto
 
-| Variable | Descripción | Ejemplo |
+El archivo queda así (y **NO se sube a git**, está en `.gitignore`):
+
+```hcl
+project_id = "cloudrisk-492619"
+region     = "europe-west1"
+jwt_secret = "e3f2a1c9...b8d7"
+```
+
+#### 💡 Por qué
+- Terraform sustituye `var.project_id`, `var.region`, `var.jwt_secret` en todos los `.tf`. Cambiar el proyecto = cambiar 1 línea.
+- `jwt_secret` se inyecta en Secret Manager vía Terraform y el backend lo lee en arranque. Así **el secret real vive en GCP**, no en git ni en tu disco.
+- Usamos `python -c "secrets.token_hex(32)"` en vez de `openssl rand` porque Windows no trae OpenSSL por defecto — Python sí.
+
+---
+
+### 6.4 — Terraform: crea TODA la infraestructura permanente
+
+Éste es el **corazón "Apepo"** del deploy: infra como código.
+
+#### 🎯 Haces esto
+```bash
+cd infrastructure/terraform
+
+terraform init       # descarga los providers + conecta al backend GCS
+terraform plan       # LEE lo que hay y simula lo que creará (NO toca nada)
+terraform apply      # crea 40+ recursos en GCP (te pide "yes" antes)
+```
+
+#### 👀 Ves esto
+```
+terraform init
+Initializing the backend...
+Successfully configured the backend "gcs"!
+Initializing provider plugins...
+- Finding hashicorp/google versions matching "~> 5.0"...
+Terraform has been successfully initialized!
+
+terraform plan
+Plan: 47 to add, 0 to change, 0 to destroy.
+
+terraform apply
+…
+Apply complete! Resources: 47 added, 0 changed, 0 destroyed.
+
+Outputs:
+api_url           = "https://cloudrisk-api-abc123-ew.a.run.app"
+hourly_scorer_url = "https://cloudrisk-hourly-scorer-xyz-ew.a.run.app"
+web_url           = "https://cloudrisk-web-def456-ew.a.run.app"
+```
+
+**Qué acabas de crear:**
+
+| Recurso | Cuántos | Archivo Terraform |
 |---|---|---|
-| `VITE_API_URL` | URL base del backend (HTTP) | `http://localhost:8080` |
-| `VITE_WS_URL` | URL del WebSocket del backend | `ws://localhost:8080` |
+| APIs GCP habilitadas | 12 | `01_apis.tf` |
+| Topics Pub/Sub (`player-movements`, `air-quality`, `weather`) | 3 | `02_pubsub.tf` |
+| Firestore Native DB + delete-protection + PITR | 1 | `03_firestore.tf` |
+| Dataset BQ `cloudrisk` + tablas | 2 | `04_bigquery.tf` + `11_steps_ingestor.tf` |
+| Artifact Registry Docker repo `cloudrisk` | 1 | `05_artifact_registry.tf` |
+| Secrets (`cloudrisk-jwt-secret`, `openweather-api-key`) | 2 | `06_secrets.tf` |
+| Service Accounts con roles mínimos | 5 | `07_iam.tf` |
+| Cloud Run Services (api, web, dashboard, air, weather, scorer) | 6 | `08_cloud_run.tf` + `11_…` |
+| Cloud Run Jobs (walker, steps-fetcher) | 2 | `08_cloud_run.tf` + `11_…` |
+| Cloud Scheduler (decay, resolve, daily fetch, hourly score) | 4 | `09_scheduler.tf` + `11_…` |
 
-En producción Vite "hornea" estos valores en el bundle durante `npm run build`. Se pasan como `--build-arg` al Dockerfile.
-
-### Build + Docker local
-
-```bash
-cd frontend
-docker build \
-  --build-arg VITE_API_URL=http://localhost:8080 \
-  --build-arg VITE_WS_URL=ws://localhost:8080 \
-  -t frontend:dev .
-docker run --rm -p 3000:8080 frontend:dev
-# → http://localhost:3000
-```
-
-### Deploy a Cloud Run
-
-```bash
-gcloud builds submit frontend/ \
-  --tag europe-west1-docker.pkg.dev/cloudrisk-492619/cloudrisk/frontend:latest \
-  --project cloudrisk-492619
-
-gcloud run deploy cloudrisk-frontend \
-  --image europe-west1-docker.pkg.dev/cloudrisk-492619/cloudrisk/frontend:latest \
-  --region europe-west1 \
-  --allow-unauthenticated \
-  --port 8080 \
-  --project cloudrisk-492619
-```
+#### 💡 Por qué
+- **`terraform init`**: descarga el provider `hashicorp/google` (v5+) y conecta con el bucket GCS del §6.2. Ejecutado 1× por portátil.
+- **`terraform plan`**: **nunca se salta**. Es el "preview" — muestra cada recurso que va a añadir/cambiar/destruir. Si ves `destroy` y no esperabas borrar nada, **para y mira** antes de `apply`.
+- **`terraform apply`**: pide `yes` antes de tocar. Tarda ~5 min la primera vez (crea 47 recursos). Después, los `apply` siguientes sólo tocan lo que cambió.
+- **Separación por `.tf`**: `01_apis.tf`, `02_pubsub.tf`… así en un squad de 5 personas cada uno edita su archivo sin conflictos de merge (estilo Apepo: `0.STRUCTURE`, `1.GITHUB`, `2.GCP_SETUP`).
 
 ---
 
-## ⚙️ Backend API
+### 6.5 — Inyecta el secreto de OpenWeatherMap
 
-Endpoints que expone el backend (puerto `8080`, prefijo `/api/v1`):
+Terraform creó el **contenedor** del secreto vacío en §6.4. Ahora le metemos el valor:
 
-| Método | Ruta | Descripción |
+#### 🎯 Haces esto
+```bash
+# Pide la API key gratis en https://openweathermap.org/api
+echo -n "TU_API_KEY_DE_OWM" \
+  | gcloud secrets versions add openweather-api-key --data-file=-
+```
+
+#### 👀 Ves esto
+```
+Created version [1] of the secret [openweather-api-key].
+```
+
+#### 💡 Por qué
+- Queremos el secreto en **Secret Manager**, no en `terraform.tfvars` (que aunque esté en `.gitignore`, puede acabar en un screenshot o un log).
+- `echo -n` → sin el `-n` añadirías un `\n` final que rompe la clave.
+- `--data-file=-` → lee el valor de stdin. Si escribieras `--data-file=mi_clave.txt`, el archivo aparecería en tu `history` del shell. Stdin desaparece en cuanto cierras la terminal.
+
+---
+
+### 6.6 — Construye las imágenes Docker con Cloud Build
+
+Éste es el **corazón "Javi Briones"** del deploy: `gcloud artifacts → builds submit → run deploy`.
+
+Terraform no compila código — Cloud Build sí. Terraform creó los **contenedores vacíos** de Cloud Run apuntando a imágenes que todavía no existen; ahora las construimos.
+
+#### 🎯 Haces esto (opción A: todo de una, con Cloud Build YAML)
+```bash
+# Desde la raíz del repo — compila 5 imágenes en paralelo
+gcloud builds submit --config=CICD/cloudbuild.yaml .
+```
+
+#### 🎯 Haces esto (opción B: un servicio a la vez, Javi-style)
+```bash
+# Patrón del profesor Javi Briones — cada servicio por separado
+bash CICD/desplegar_manual.sh backend           # FastAPI
+bash CICD/desplegar_manual.sh walker            # Cloud Run Job (pasos sintéticos)
+bash CICD/desplegar_manual.sh frontend          # React + Vite
+bash CICD/desplegar_manual.sh dashboard         # Streamlit
+bash CICD/desplegar_manual.sh steps-ingestor    # fetcher + scorer
+```
+
+El script `desplegar_manual.sh` es un wrapper fino de **exactamente los 3
+comandos del profesor**:
+
+```bash
+# lo que el script hace por ti para cada servicio:
+gcloud artifacts repositories create cloudrisk \
+  --repository-format=docker --location=europe-west1
+gcloud builds submit <carpeta>/ \
+  --tag europe-west1-docker.pkg.dev/cloudrisk-492619/cloudrisk/<svc>:latest
+gcloud run deploy cloudrisk-<svc> \
+  --image europe-west1-docker.pkg.dev/cloudrisk-492619/cloudrisk/<svc>:latest \
+  --region europe-west1 --platform managed --allow-unauthenticated
+```
+
+#### 👀 Ves esto
+```
+Creating temporary tarball archive of 42 file(s) totalling 180.5 KiB
+Uploading tarball of [.] to gs://cloudrisk-492619_cloudbuild/source/...
+BUILD SUCCESS
+Service [cloudrisk-backend] revision [cloudrisk-backend-00001-abc] has been deployed
+Service URL: https://cloudrisk-backend-xxxxx-ew.a.run.app
+```
+
+#### 💡 Por qué
+- **Separación Terraform vs gcloud** = separación **infra vs imagen**. Terraform gestiona cosas que cambian poco (topics, tablas, IAM). `gcloud builds submit` gestiona lo que cambia con cada commit (la imagen Docker).
+- **`gcloud artifacts repositories create`**: registro privado de imágenes Docker en Europe-west1. Sólo se crea 1 vez — si ya existe, el script salta (`describe || create`).
+- **`gcloud builds submit --tag ...`**: sube tu carpeta (`backend/`) a GCS, lanza Cloud Build con el `Dockerfile` que hay dentro, y al terminar deja la imagen en Artifact Registry. Todo sin que tengas Docker instalado.
+- **`gcloud run deploy … --allow-unauthenticated`**: crea/actualiza el servicio con una URL pública. Para servicios internos (como `cloudrisk-hourly-scorer`) usamos `--no-allow-unauthenticated` y el Scheduler manda un OIDC token.
+- **Primera compilación**: ~8 min. Siguientes con cache: ~2 min.
+
+---
+
+### 6.7 — Lanza el pipeline Dataflow
+
+Streaming continuo: Pub/Sub → transformaciones Apache Beam → BigQuery.
+
+#### 🎯 Haces esto
+```bash
+# Crea el bucket staging (una vez)
+gsutil mb -l europe-west1 gs://cloudrisk-492619-dataflow
+
+# Lanza el job streaming — requiere Python 3.12 (NO 3.13)
+python pipelines/ambiental_a_bq.py \
+  --runner=DataflowRunner \
+  --project=cloudrisk-492619 \
+  --region=europe-west1 \
+  --temp_location=gs://cloudrisk-492619-dataflow/tmp \
+  --staging_location=gs://cloudrisk-492619-dataflow/staging \
+  --air_subscription=projects/cloudrisk-492619/subscriptions/air-quality-sub \
+  --weather_subscription=projects/cloudrisk-492619/subscriptions/weather-sub \
+  --output_table=cloudrisk-492619:cloudrisk.environmental_factors \
+  --streaming
+```
+
+#### 👀 Ves esto
+```
+INFO: Starting the Dataflow job 'cloudrisk-env-to-bq-…'
+INFO: Created job with id: 2026-04-17_…
+```
+
+Ve a la consola: `https://console.cloud.google.com/dataflow/jobs?project=cloudrisk-492619`
+y verás el DAG ejecutándose en tiempo real.
+
+#### 💡 Por qué
+- **`--runner=DataflowRunner`** → lo ejecuta GCP, no tu portátil. Autoescala workers según carga (0 si no hay mensajes).
+- **`--streaming`** → el job no termina; se queda escuchando Pub/Sub indefinidamente.
+- **Subscriptions `-sub`** → Terraform las creó en §6.4. Los nombres `air-quality-sub` / `weather-sub` son el **contrato del equipo** (ver §9 Firestore contrato).
+
+---
+
+### 6.8 — Siembra datos de demo (partida lista para jugar)
+
+#### 🎯 Haces esto
+```bash
+cd ../..   # vuelve a la raíz del repo
+
+# macOS / Linux / WSL / Git Bash
+bash CICD/sembrar_demo.sh cloudrisk-492619
+
+# Windows PowerShell
+.\scripts\bootstrap_demo.ps1 -Project cloudrisk-492619
+```
+
+#### 👀 Ves esto
+```
+▶ sembrar_demo.sh  project=cloudrisk-492619
+✔ 4 users       (norte / sur / este / oeste @ cloudrisk.app, pass=demo1234)
+✔ 86 zones      (barrios de Valencia)
+✔ 4 user_balance docs  (contrato del equipo)
+✔ 86 location_balance docs (38 conquistadas, 48 libres)
+✔ 3 battles en histórico
+✔ 4 mensajes a air-quality y weather
+```
+
+#### 💡 Por qué
+- Los recursos están vacíos tras el apply — sin este paso, el frontend arranca en un mapa vacío sin jugadores.
+- **Idempotente** (`merge=True`): puedes relanzar el script las veces que quieras. No duplica.
+- Hay detalle completo en §7 (sección grande de datos en tiempo real).
+
+---
+
+### 6.9 — Verifica que todo funciona
+
+#### 🎯 Haces esto
+```bash
+# URLs de tus servicios
+cd infrastructure/terraform
+terraform output
+
+# Smoke test del API
+curl "$(terraform output -raw api_url)/health"
+
+# Cuenta docs en Firestore
+bash ../../CICD/verificar_demo.sh cloudrisk-492619
+
+# Abre el frontend
+# macOS:
+open "$(terraform output -raw web_url)"
+# Windows PowerShell:
+Start-Process (terraform output -raw web_url)
+# Linux:
+xdg-open "$(terraform output -raw web_url)"
+```
+
+#### 👀 Ves esto
+```
+$ curl .../health
+{"status":"ok","service":"cloudrisk-api","version":"1.0.0"}
+
+$ bash CICD/verificar_demo.sh cloudrisk-492619
+Proyecto: cloudrisk-492619
+  users                   4 docs   [OK]
+  zones                  86 docs   [OK]
+  user_balance            4 docs   [OK]
+  location_balance       86 docs   [OK]
+  battles                 3 docs   [OK]
+```
+
+Si el `/health` devuelve JSON y el `verificar_demo.sh` muestra `[OK]` en las 5 colecciones, **el deploy está completo**. Accede con `este@cloudrisk.app / demo1234` (líder demo con 12 zonas) y deberías ver el mapa con 38 zonas coloreadas.
+
+#### 💡 Por qué
+- `terraform output` lee del state en GCS y te devuelve todas las URLs sin pedirlas a GCP una por una.
+- `/health` es un endpoint `@app.get` del FastAPI que sólo devuelve `{"status":"ok"}`. Si devuelve otro código HTTP → el pod arranca pero algo crashea en runtime.
+- `verificar_demo.sh` golpea Firestore directo (sin pasar por el API) → aísla "el seed funciona" de "el API funciona".
+
+---
+
+## 7. Cómo recibimos datos en tiempo real (random_tracker + demo seed)
+
+> **Éste es el corazón pedagógico del proyecto.** Un sistema serverless que todos los
+> días recibe pasos reales de una fuente externa, los convierte en puntos del juego
+> y los deja visibles al jugador en **< 1 hora** — sin un solo servidor encendido
+> entre una ejecución y la siguiente.
+>
+> Esta sección explica **qué llega, de dónde, cómo, cada cuánto, quién lo procesa
+> y dónde aterriza**. Si sólo vas a leer una sección, que sea ésta.
+
+### 7.1 — El principio: pasos reales → puntos del juego
+
+En CloudRISK, los **ejércitos y el oro** de cada jugador no se regalan: salen de
+los pasos que da en la vida real. Esto obliga al sistema a tener una pipeline
+de datos **continua** (no un job one-shot) que:
+
+1. **Capte** pasos reales desde una fuente externa (`random_tracker`, repo GitHub).
+2. **Los transporte** como eventos individuales (Pub/Sub).
+3. **Los persista** para analítica (BigQuery, particionado por día).
+4. **Los convierta en estado de juego** cada hora (Firestore: `user_balance`, `users`).
+5. **Sea observable** por el jugador desde el frontend (endpoint de estado en vivo).
+
+Este ciclo **se repite 24 veces al día de forma automática** — Cloud Scheduler
+dispara el fetcher una vez (03:00 Europe/Madrid) y el scorer cada hora en punto.
+
+### 7.2 — Diagrama de la pipeline completa
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  FUENTE EXTERNA                                                          │
+│  github.com/FranciscoAlvarezVaras/random_tracker/movements.json          │
+└─────────────────────────────────┬────────────────────────────────────────┘
+                                  │  (pull 1×/día, 03:00 Madrid)
+                                  ▼
+                  ┌───────────────────────────────────┐
+                  │  Cloud Run JOB                    │
+                  │  cloudrisk-steps-fetcher          │
+                  │  (recolector_pasos_diario.py)         │
+                  │                                   │
+                  │  - resuelve player_id (mapping)   │
+                  │  - marca idempotencia SHA256      │
+                  │  - publica 1 msg por movimiento   │
+                  └───────────────┬───────────────────┘
+                                  │  JSON por mensaje:
+                                  │  { player_id, ts, steps_delta,
+                                  │    latitude, longitude, speed_mps,
+                                  │    source:"real", ingested_at }
+                                  ▼
+           ┌──────────────────────────────────────────┐
+           │  Pub/Sub Topic: player-movements         │  ◄─── también publica
+           │  (bus único, multi-producer)             │       el walker y el
+           └──────────────────┬───────────────────────┘       backend /steps/sync
+                              │
+                              ▼
+           ┌──────────────────────────────────────────┐
+           │  Dataflow streaming (Apache Beam 2.55)   │
+           │  pipelines/ambiental_a_bq.py        │
+           │  (Noelia + Martha)                       │
+           └──────────────────┬───────────────────────┘
+                              │
+                              ▼
+         ┌──────────────────────────────────────────────┐
+         │  BigQuery                                    │
+         │  `cloudrisk.player_movements_raw`            │
+         │  - particionado por DAY(ts)                  │
+         │  - cluster (player_id, source)               │
+         │  - scan por hora ≈ 1 partición ≈ ~€0         │
+         └─────────────┬────────────────────────────────┘
+                       │  cada hora en punto
+                       ▼
+         ┌──────────────────────────────────────────────┐
+         │  Cloud Run SERVICE                           │
+         │  cloudrisk-hourly-scorer                     │
+         │  (puntuador_horario.py — FastAPI /run)           │
+         │                                              │
+         │  - SELECT steps últimos 60 min por jugador   │
+         │  - averagea environmental.multiplier         │
+         │  - points = steps × mult                     │
+         │  - armies = points // 10                     │
+         │  - gold   = points // 100                    │
+         └─────────────┬────────────────────────────────┘
+                       │
+        ┌──────────────┼──────────────┬────────────────────┐
+        ▼              ▼              ▼                    ▼
+  users/{id}   user_balance/{id}  hourly_score_log/   step_ingests/{date}
+  (steps_total, (armies, gold,   {timestamp, player_id, (sha256 marker,
+   power_points, last_scored_at)  points, armies, gold}  count, ts — idempot.)
+   gold)
+                                                          ▲
+                                                          │
+                              ┌───────────────────────────┴─┐
+                              │  Frontend React             │
+                              │  GET /steps/realtime-       │
+                              │      ingestion-status       │
+                              │  → muestra "🛰️ Ingesta en  │
+                              │    vivo" en el dashboard    │
+                              └─────────────────────────────┘
+```
+
+### 7.3 — Cadencia y responsabilidad
+
+| Cuándo | Quién lo dispara | Qué hace | Dónde aterriza |
+|---|---|---|---|
+| `03:00 Europe/Madrid` (diario) | `cloudrisk-steps-fetcher-daily` (Cloud Scheduler) | `Cloud Run Job` lee `random_tracker/movements.json`, publica N mensajes al topic | Pub/Sub `player-movements` |
+| continuo (streaming) | Dataflow worker (autoscale 0→N) | Transforma + deduplica + enriquece | BigQuery `player_movements_raw` |
+| `minuto 0 de cada hora` | `cloudrisk-hourly-scorer-cron` (Cloud Scheduler) | `Cloud Run Service` llama a `POST /run` y corre el scoring | Firestore `user_balance`, `users`, `hourly_score_log` |
+| on-demand | Frontend (cada 30 s cuando el jugador abre el HUD) | `GET /steps/realtime-ingestion-status` | Respuesta JSON con desglose por `source` |
+
+### 7.4 — Por qué Pub/Sub como "bus único"
+
+El topic `player-movements` recibe de **tres productores distintos** y se
+distingue con el campo `source`:
+
+| Productor | `source` | Propósito |
 |---|---|---|
-| GET | `/health` | Liveness/readiness probe |
-| GET | `/api/v1/state/player/{player_id}` | Estado del jugador (ejércitos y pasos totales) |
-| GET | `/api/v1/state/locations` | Lista de zonas del mapa con ejércitos |
-| POST | `/api/v1/actions/place` | Registra "poner N ejércitos en una zona" |
+| `cloudrisk-steps-fetcher` (diario) | `"real"` | Pasos reales del GitHub `random_tracker` |
+| `walker` (Cloud Run Job, simulador) | `"synthetic_walker"` | Partidas demo y tests E2E |
+| Backend `POST /steps/sync` (app móvil) | `"backend_sync"` | Pasos que la app del usuario empuja manualmente |
 
-Documentación interactiva (Swagger): **`http://localhost:8080/api/v1/docs`**
+**Ventaja:** la pipeline de Noelia+Martha es **una sola** — cambiar de fuente
+no implica cambiar el pipeline, solo filtrar por `source` si hace falta.
 
-### 🏛️ Arquitectura en capas
+### 7.5 — Idempotencia (cero duplicados aunque el Scheduler reintente)
 
-El backend está organizado en **capas separadas** para que cada archivo haga una sola cosa:
+`recolector_pasos_diario.py` calcula un `sha256` del JSON descargado y escribe
+un marker en Firestore `step_ingests/{YYYY-MM-DD}`:
 
-```
-backend/
-└── cloudrisk_api/
-    ├── main.py                  # 👔 monta la app FastAPI y registra los endpoints
-    ├── config.py                # ⚙️ variables de entorno (pydantic_settings)
-    ├── endpoints/               # 🍽️ "camareros": reciben HTTP, validan, llaman a la BD
-    │   ├── estado.py            #    GET /state/player/...  GET /state/locations
-    │   └── acciones.py          #    POST /actions/place
-    └── database/                # 👨‍🍳 "cocineros": hablan con Firestore y BigQuery
-        ├── firestore_db.py
-        └── bigquery_db.py
+```python
+{
+  "date": "2026-04-16",
+  "sha256": "abc123...",
+  "count": 142,
+  "ingested_at": "2026-04-16T03:00:12Z"
+}
 ```
 
-**Analogía rápida:** un restaurante. Los archivos de `endpoints/` son **camareros** que toman tu pedido en la mesa; los archivos de `database/` son **cocineros** que hablan con la nevera y el fuego; `main.py` es el **dueño** que monta el local y enciende las luces.
+Si el Scheduler reintenta (hiccup de red, timeout, etc.) la segunda ejecución
+ve el marker con el mismo `sha256` → **aborta sin publicar nada**. Nunca se
+duplican pasos, nunca se duplican puntos.
 
-### ✅ Ventajas de esta separación
+### 7.6 — Archivos involucrados (mapa de código)
 
-- **Cambiar de base de datos no rompe nada**
-  Si mañana cambiamos BigQuery por otra cosa (Postgres, ClickHouse, lo que sea), **solo se toca `database/bigquery_db.py`**. Los archivos de `endpoints/` ni se enteran. Lo mismo con Firestore.
-
-- **Añadir un endpoint nuevo es trivial**
-  Creas un archivo nuevo en `endpoints/` (o añades una función a uno existente) y ya está. **No tocas la lógica de negocio que ya funcionaba**, así que no hay riesgo de romper nada.
-
-- **Tests sin levantar FastAPI**
-  Los archivos de `database/` son funciones normales de Python. Puedes testearlas con `pytest` directamente, sin tener que arrancar un servidor HTTP. Más rápido y más limpio.
-
-- **Estilo estándar de la industria**
-  Es la arquitectura por capas que se usa en proyectos profesionales (también la que usa el repo del profe). Cualquier persona que se incorpore al equipo entiende el código en 5 minutos.
-
----
-
-## 📁 ¿Qué es la carpeta `CICD/`?
-
-Contiene **todo lo relacionado con desplegar y operar el proyecto**: scripts manuales para el día a día y plantillas automáticas de Cloud Build. **CI/CD** significa *"Continuous Integration / Continuous Deployment"*: que cada vez que alguien hace `git push`, GCP construya la imagen Docker y la despliegue a Cloud Run sola, sin que nadie toque nada.
-
-### 🛠 Scripts manuales (los lanzas tú a mano)
-
-| Script | Para qué sirve | Cuándo se ejecuta |
+| Archivo | Rol | Quién lo mantiene |
 |---|---|---|
-| `CICD/crear_tablas_bigquery.sh` | Crea las tablas de BigQuery (`user_actions`) | **Una sola vez**, al montar el proyecto desde cero |
-| `CICD/probar_api.sh` | Hace `curl` a todos los endpoints del backend | Cada vez que quieras probar que la API responde bien |
-| `CICD/desplegar_manual.sh` | Build + deploy manual a Cloud Run desde tu portátil | Cuando quieres desplegar sin esperar al CI/CD |
+| `steps_ingestor/recolector_pasos_diario.py` | Cloud Run Job: tira `random_tracker` y publica | Álvaro |
+| `steps_ingestor/puntuador_horario.py` | Cloud Run Service FastAPI: scoring horario | Álvaro |
+| `steps_ingestor/Dockerfile` | Imagen única para Job + Service | Álvaro |
+| `steps_ingestor/requirements.txt` | `fastapi`, `google-cloud-{pubsub,firestore,bigquery}` | Álvaro |
+| `data/random_tracker_mapping.json` | Mapea usuario GitHub → `player_id` | Álvaro |
+| `data/mock_tracker_feed.json` | Feed offline para dev/test sin red | Álvaro |
+| `infrastructure/terraform/11_steps_ingestor.tf` | BQ table + Job + Service + 2 Schedulers + IAM | Fran |
+| `backend/cloudrisk_api/endpoints/pasos.py` | Endpoint `GET /steps/realtime-ingestion-status` | Fran |
+| `backend/cloudrisk_api/database/publicador_pubsub.py` | Publica con `source="backend_sync"` | Fran |
+| `notebooks/02_alvaro_ingestion.ipynb` §B | Guion paso-a-paso (celdas B.1–B.8) | Álvaro |
 
-### ⚙️ Plantillas Cloud Build (las lanza GCP solo con `git push`)
+### 7.7 — Demo seed permanente (cross-platform Windows + macOS)
 
-| Archivo | Qué construye | Dónde lo despliega |
+Cuando haces `terraform apply` por primera vez, **no queremos un entorno vacío**
+— queremos que el juego esté arrancado con 4 comandantes, 87 zonas, 3 batallas
+en curso y ~60 ejércitos ya repartidos. Para eso existe el "demo seed":
+
+**Archivos:**
+
+- `data/demo_game_state.json` — estado mid-game determinista (4 players, 38 zonas poseídas, 3 battles)
+- `scripts/sembrar_demo.py` — orquestador Python (UTF-8 en Windows, bcrypt, merge=True idempotente)
+- `scripts/bootstrap_demo.sh` — wrapper bash (Linux/macOS)
+- `scripts/bootstrap_demo.ps1` — wrapper PowerShell (Windows)
+- `CICD/sembrar_demo.sh` — wrapper del equipo, estilo Álvaro (`bash CICD/sembrar_demo.sh`)
+- `CICD/verificar_demo.sh` — cuenta documentos en Firestore tras el seed
+- `infrastructure/terraform/10_demo_seed.tf` — `null_resource` con `local-exec` que elige PS o sh según plataforma
+
+#### 🎯 Haces esto (cómo lo usa el equipo)
+
+```bash
+# macOS / Linux / WSL / Git Bash — estilo equipo Álvaro
+bash CICD/sembrar_demo.sh cloudrisk-492619
+
+# Windows PowerShell — mismo resultado
+.\scripts\bootstrap_demo.ps1 -Project cloudrisk-492619
+
+# Cualquier plataforma — directo al Python
+python scripts/sembrar_demo.py --project cloudrisk-492619
+```
+
+O **automáticamente** desde Terraform (se lanza después del `apply`):
+
+```bash
+cd infrastructure/terraform
+terraform apply -var='seed_demo_on_apply=true'
+```
+
+#### 💡 Por qué
+- Un `terraform apply` solo crea infra vacía. Sin el seed, el frontend arranca en un mapa completo de Valencia **sin ningún jugador** → parece que todo falló.
+- Los tres wrappers (`.sh`, `.ps1`, `sembrar_demo.sh`) llaman todos al **mismo `sembrar_demo.py`**. Usa el que mejor encaje con tu terminal.
+- `seed_demo_on_apply=true` es un flag Terraform que dispara un `null_resource` con `local-exec` — útil en CI/CD donde no hay humano para ejecutar comandos después del apply.
+
+Al terminar verás algo como:
+
+```
+✔ 4 users seeded       (norte / sur / este / oeste — cardinales de Valencia)
+✔ 86 zones seeded      (Valencia neighbourhoods)
+✔ 4 user_balance docs  (armies + gold + steps + level listos)
+✔ 86 location_balance docs   (38 conquistadas, 48 libres)
+✔ 3 battles recientes en el histórico
+✔ 4 mensajes de ejemplo publicados a air-quality / weather
+
+Login demo (todos con pass demo1234):
+  norte@cloudrisk.app   · 280 armies · 10 zonas · 640 gold · lvl 3
+  sur@cloudrisk.app     · 220 armies ·  8 zonas · 480 gold · lvl 3
+  este@cloudrisk.app    · 340 armies · 12 zonas · 820 gold · lvl 4   ← líder
+  oeste@cloudrisk.app   · 190 armies ·  8 zonas · 360 gold · lvl 2
+```
+
+> **Tip para la demo en clase:** empieza logueado como `este@cloudrisk.app`
+> (es el líder) desde tu máquina y abre otra ventana de incógnito con
+> `norte@cloudrisk.app` — verás los dos mapas con zonas distintas y podrás
+> enseñar un ataque en vivo entre barrios.
+
+### 7.8 — Qué queda "encendido" tras el apply (y cuánto cuesta)
+
+| Recurso | Estado idle | Coste idle |
 |---|---|---|
-| `CICD/desplegar_backend_auto.yml` | Imagen Docker del backend | Cloud Run (servicio HTTP en `:8080`) |
-| `CICD/desplegar_walker_auto.yml` | Imagen Docker del walker | Cloud Run Job (proceso continuo) |
-| `CICD/README.md` | Instrucciones para conectar los triggers de GitHub | (documentación) |
+| `cloudrisk-steps-fetcher` (Cloud Run Job) | escalado a 0 | 0 € |
+| `cloudrisk-hourly-scorer` (Cloud Run Service) | `min-instances=0` | 0 € |
+| 2 Cloud Scheduler jobs | inactivos 364× al día | ~0,10 €/mes los dos |
+| `player_movements_raw` (BigQuery) | 200 KB/día | < 0,01 €/mes en storage |
+| Pub/Sub topic | sin retención prolongada | 0 € con volumen demo |
 
-### Diferencia entre `desplegar_manual.sh` y los `*.yml`
+**Total esperado con partida demo 24/7: < 0,20 €/mes.** Sin un solo servidor
+encendido permanentemente.
 
-- **`CICD/desplegar_manual.sh`** → tú lanzas el deploy **a mano** desde tu portátil cuando tú quieras.
-- **`CICD/*.yml`** → el deploy se lanza **solo**, cada vez que haces `git push` a `main`.
+### 7.9 — Verificar la pipeline end-to-end (5 comandos)
 
-Los dos hacen lo mismo (construir imagen + desplegar). La diferencia es **quién aprieta el botón**: tú a mano (`desplegar_manual.sh`) o GCP automático (los YAML).
+#### 🎯 Haces esto (los 5 pasos, en orden)
 
-**Analogía:** `desplegar_manual.sh` es lavarte los platos a mano cuando tú decides; los `*.yml` son el lavavajillas que se enciende solo cuando metes los platos sucios.
-
-### Probar el backend localmente
 ```bash
-# 1. Crear la tabla BigQuery (una sola vez)
-bash CICD/crear_tablas_bigquery.sh
+# 1) Dispara el fetcher ahora mismo (sin esperar a las 03:00 Madrid)
+gcloud run jobs execute cloudrisk-steps-fetcher --region europe-west1 --wait
 
-# 2. Levantar todo
-docker compose up --build
+# 2) Confirma que llegaron mensajes al topic
+gcloud pubsub subscriptions pull player-movements-debug --auto-ack --limit 5
 
-# 3. En otra terminal
-bash CICD/probar_api.sh
+# 3) Verifica que aterrizaron en BigQuery
+bq query --use_legacy_sql=false \
+  "SELECT source, COUNT(*) FROM \`cloudrisk-492619.cloudrisk.player_movements_raw\`
+   WHERE DATE(ts) = CURRENT_DATE() GROUP BY source"
+
+# 4) Dispara el scorer ahora mismo (sin esperar al minuto 0 de la hora)
+SCORER_URL=$(terraform output -raw hourly_scorer_url)
+curl -X POST "$SCORER_URL/run" \
+     -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+
+# 5) Mira cómo subieron los armies del jugador en Firestore
+bash CICD/verificar_demo.sh cloudrisk-492619
+```
+
+#### 👀 Ves esto
+```
+1) Execution [cloudrisk-steps-fetcher-abc] has successfully completed.
+2) ┌─────────────────────────────────────────────────────────────┐
+   │ DATA                                                        │
+   │ {"player_id":"alvaro","steps_delta":320,"source":"real"...} │
+   │ {"player_id":"fran",  "steps_delta":210,"source":"real"...} │
+   └─────────────────────────────────────────────────────────────┘
+3) +--------+-------+
+   | source | f0_   |
+   +--------+-------+
+   | real   |   142 |
+   +--------+-------+
+4) {"status":"scored","players":4,"total_armies":47,"total_gold":4}
+5) users            4 docs   [OK]
+   user_balance     4 docs   [OK]
+```
+
+#### 💡 Por qué cada paso
+- **1)** `gcloud run jobs execute` lanza el Cloud Run Job manualmente. Sin `--wait` la CLI vuelve al prompt de inmediato y no sabes si la ejecución terminó.
+- **2)** `subscriptions pull --auto-ack` saca hasta 5 mensajes encolados sin volver a repartirlos → si los ves, la pipeline **publicó** bien. Si sale vacío, el fetcher no publicó (mira los logs del Job).
+- **3)** La consulta a BigQuery prueba que **Dataflow** consumió los mensajes y los escribió. Sólo escanea la partición de hoy (~1MB, ~€0).
+- **4)** El scorer está protegido con `--no-allow-unauthenticated`; por eso mandamos un **identity token** Bearer. Scheduler lo hace automáticamente cada hora.
+- **5)** `verificar_demo.sh` te confirma que `user_balance` pasó a tener armies+gold actualizados. Si sale `[OK]` pero los armies no suben, mira `hourly_score_log/` en Firestore.
+
+Si los 5 pasos devuelven datos → **la pipeline de tiempo real está operativa**.
+A partir de ese momento, cada hora **los jugadores reciben automáticamente los
+puntos de los pasos reales que caminó el repo `random_tracker` ese día**.
+
+### 7.10 — Lectura recomendada
+
+- **Notebook Álvaro**, sección **🛰️ Parte B** — ejecución celda a celda (17 celdas con verificación).
+- **`steps_ingestor/README.md`** — decisiones de diseño y arquitectura del componente.
+- **Terraform `11_steps_ingestor.tf`** — cada recurso comentado con "por qué" y no sólo "qué".
+
+---
+
+## 8. Terraform: qué hace cada archivo
+
+Hemos dividido el terraform en 9 archivos temáticos (en vez de un solo `main.tf`
+de 350 líneas) para que sea más fácil de leer y modificar:
+
+| Archivo | Qué crea | Por qué está separado |
+|---|---|---|
+| `providers.tf` | Provider Google + backend GCS | Configuración global |
+| `variables.tf` | Inputs (project_id, region, jwt_secret) | Lo primero que lees |
+| `01_apis.tf` | Habilita 12 APIs de GCP | Nada funciona sin esto |
+| `02_pubsub.tf` | 3 topics + 3 subscriptions | Contrato con el equipo |
+| `03_firestore.tf` | Database con delete-protection + PITR | Datos operativos |
+| `04_bigquery.tf` | Dataset + tabla `environmental_factors` | Analytics |
+| `05_artifact_registry.tf` | Repo Docker privado | Imágenes de servicios |
+| `06_secrets.tf` | JWT secret + OpenWeatherMap key | Nunca en código |
+| `07_iam.tf` | 4 Service Accounts + permisos mínimos | Seguridad |
+| `08_cloud_run.tf` | 5 services + 1 job | Compute |
+| `09_scheduler.tf` | 2 cron jobs | Automatización |
+| `outputs.tf` | URLs + IDs al terminar | Integración scripts |
+
+**Cada archivo está comentado en español** para un junior de data engineer —
+puedes abrirlo y entender qué hace cada resource sin mirar la doc oficial.
+
+**Para destruir todo** (cuidado, borra TU proyecto GCP):
+
+```bash
+# 1. Primero desactivar la delete-protection de Firestore (manual)
+gcloud firestore databases update --database='(default)' --delete-protection-state=DELETE_PROTECTION_DISABLED
+
+# 2. Destruir el resto con Terraform
+cd infrastructure/terraform
+terraform destroy
 ```
 
 ---
 
-## ☁️ Deploy a Cloud Run
+## 9. Firestore — esquema y contrato
 
-```bash
-# Todo de golpe
-bash CICD/desplegar_manual.sh
+### 8.1 Contrato compartido (con Álvaro, Noelia, Martha)
 
-# Solo backend
-bash CICD/desplegar_manual.sh backend
+Estas 2 colecciones son **el contrato**. No se pueden renombrar ni cambiar
+su schema sin acuerdo de todo el equipo.
 
-# Solo walker (como Cloud Run Job)
-bash CICD/desplegar_manual.sh walker
+```
+user_balance/{player_id}
+├── armies         int     # tropas disponibles para desplegar
+├── total_steps    int     # acumulado de pasos del jugador
+└── updated_at     str     # ISO timestamp
+
+location_balance/{zone_id}
+├── armies         int     # tropas defensoras en la zona
+├── owner          str     # player_id actual (o null si libre)
+└── updated_at     str     # ISO timestamp
 ```
 
-El script es idempotente: crea el repo de Artifact Registry si no existe, sube la imagen con Cloud Build y despliega en Cloud Run.
+### 8.2 Colecciones extendidas (sólo las lee nuestro backend)
 
----
-
-## 🔁 CI/CD con Cloud Build (estilo profe)
-
-Plantillas en `CICD/`:
-- `CICD/desplegar_backend_auto.yml` — build + deploy del backend a Cloud Run.
-- `CICD/desplegar_walker_auto.yml` — build + deploy del walker como Cloud Run Job.
-
-Lanzar manualmente:
-```bash
-gcloud builds submit . --config=CICD/desplegar_backend_auto.yml --project=cloudrisk-492619
-gcloud builds submit . --config=CICD/desplegar_walker_auto.yml  --project=cloudrisk-492619
+```
+users/{player_id}           # perfil completo (email, level, gold, clan_color, …)
+zones/{zone_id}             # geojson, name, conquered_at, defense_level, …
+clans/{clan_id}             # miembros, colour, total_power (legacy — no se usa en v3)
+battles/{battle_id}         # historial de combates
+step_logs/{log_id}          # raw step events (para analytics)
 ```
 
-Para conectar triggers automáticos en `git push`, ver [`CICD/README.md`](CICD/README.md).
+### 8.3 Topics Pub/Sub
+
+```
+player-movements    {player_id, lat, lng, steps, timestamp}   # ← Fran
+air-quality         {zone_id, pm25, pm10, no2, timestamp}     # ← Álvaro
+weather             {zone_id, temp_c, wind_kmh, timestamp}    # ← Álvaro
+```
+
+Todos en formato JSON UTF-8. Schema exacto en `pipelines/schemas/`.
+
+### 8.4 Tablas BigQuery
+
+```
+cloudrisk.environmental_factors     # air+weather fusionados (lo escribe Dataflow)
+cloudrisk.user_actions              # append-only de movimientos (opcional)
+cloudrisk.battle_metrics            # resultado de cada batalla (opcional)
+cloudrisk.daily_rollup              # agregado diario (vista)
+```
 
 ---
 
-## 👥 Reparto del equipo
+## 10. Backup y restore de Firestore
 
-Quién hace qué en el proyecto: [`docs/REPARTO_EQUIPO.md`](docs/REPARTO_EQUIPO.md)
+Firestore NO tiene backup automático en free tier. Protegemos el proyecto con 3 capas:
 
-Documentación extra:
-- [`docs/EXPLICACION.md`](docs/EXPLICACION.md) — Walkthrough visual del sistema con diagramas.
-- [`docs/RESUMEN_EQUIPO.md`](docs/RESUMEN_EQUIPO.md) — Update en primera persona para el equipo.
+### 9.1 Delete Protection (protección anti-accidente)
+
+Ya la activa Terraform (`03_firestore.tf`). Cualquier `firestore databases delete`
+ahora falla con un mensaje claro. Reversible.
+
+### 9.2 Point-in-Time Recovery (rolling 7 días)
+
+Ya la activa Terraform. Coste: ~0.01 €/mes con nuestros 200 KB de datos.
+
+Restore a cualquier momento en los últimos 7 días:
+
+```bash
+gcloud firestore databases restore \
+  --source-backup=RESTORE_POINT \
+  --destination-database=cloudrisk-recovered
+```
+
+### 9.3 Export a GCS (snapshot congelado manual)
+
+```bash
+gsutil mb -l europe-west1 gs://cloudrisk-492619-backups
+
+gcloud firestore export \
+  gs://cloudrisk-492619-backups/firestore-$(date +%Y%m%d-%H%M%S) \
+  --database='(default)' \
+  --collection-ids=users,zones,user_balance,location_balance
+```
+
+### 9.4 Restore desde un export
+
+```bash
+gcloud firestore import gs://cloudrisk-492619-backups/firestore-20260416-030000
+```
 
 ---
 
-## 🆘 Problemas comunes
+## 11. Demo accounts + comandos de dev
 
-- **`Could not load the default credentials`** → Revisa que `ADC_PATH` en `.env` apunte a un archivo existente.
-- **`PERMISSION_DENIED`** → Pide al admin que te añada al IAM del proyecto.
-- **Docker no arranca** → Asegúrate de que Docker Desktop está corriendo.
+### Demo accounts (4 comandantes pre-seedeados)
+
+Auto-seedeados al arrancar con `USE_LOCAL_STORE=1`:
+
+| Email | Password | Facción |
+|---|---|---|
+| `norte@cloudrisk.app` | `demo1234` | Norte |
+| `sur@cloudrisk.app` | `demo1234` | Sur |
+| `este@cloudrisk.app` | `demo1234` | Este |
+| `oeste@cloudrisk.app` | `demo1234` | Oeste |
+
+Auto-login por defecto: Norte. Override: `?player=sur`, `?player=este`, `?player=oeste`.
+
+### Comandos útiles
+
+| Qué | Comando |
+|---|---|
+| Tests backend | `cd backend && USE_LOCAL_STORE=1 SECRET_KEY=dev python -m pytest -v` |
+| Build frontend | `cd frontend && npm run build` |
+| Simular partida completa | `python data_generator/simulacion_multijugador.py --runs 3` |
+| Semillar Firestore | `python scripts/sembrar_firestore.py --team-schema` |
+| Pipeline local (DirectRunner) | ver `notebooks/03_noelia_martha_pipeline.ipynb` celda 2 |
+| Export a repo del equipo | `bash scripts/sync_to_team_repo.sh --all` |
+
+---
+
+## 12. CI/CD con Cloud Build
+
+**Push a `main` → Cloud Build trigger → redeploy automático.**
+
+Configuración en `CICD/cloudbuild.yaml`. El trigger se configura una vez con:
+
+```bash
+gcloud builds triggers create github \
+  --repo-name=DTP2-SAFE \
+  --repo-owner=RicardoEdreiraPenas \
+  --branch-pattern="^main$" \
+  --build-config=CICD/cloudbuild.yaml \
+  --name=cloudrisk-main-deploy
+```
+
+El pipeline:
+
+1. Corre los tests backend (pytest)
+2. Compila las 5 imágenes Docker en paralelo
+3. Las sube a Artifact Registry
+4. Re-despliega los Cloud Run services
+5. Ejecuta un smoke test contra `/health`
+
+---
+
+## 13. Fusión con el repo del equipo
+
+Este repo está estructurado para mergear limpio en
+[`alvarogimenezc/DATA-PROJECT-2-EDEM`](https://github.com/alvarogimenezc/DATA-PROJECT-2-EDEM)
+como **6 PRs independientes**, una por owner. Proceso paso a paso en
+[`notebooks/05_adaptar_al_equipo.ipynb`](./notebooks/05_adaptar_al_equipo.ipynb).
+
+### Orden recomendado de PRs
+
+| # | Owner | Ruta en DATA-PROJECT-2-EDEM | Contenido |
+|---|---|---|---|
+| 1 | **Álvaro** | `infrastructure/` | Terraform completo (primero) |
+| 2 | Fran | `walker/` | `data_generator/juego_caminante.py` + Dockerfile |
+| 3 | Fran | `backend/` + `bq_schemas/` | `backend/cloudrisk_api/` + tests |
+| 4 | Álvaro | `air_ingestor/` + `weather_ingestor/` | `weather_airq/*.py` + secretos |
+| 5 | Noelia + Martha | `pipelines/` | `pipelines/` completo |
+| 6 | Ricardo | `frontend/` | `frontend/` completo |
+
+**Orden importante:** Álvaro PR#1 (infra) debe mergearse ANTES que las demás.
+
+---
+
+## 14. Runbook de incidencias comunes
+
+| Síntoma | Causa probable | Fix |
+|---|---|---|
+| Backend 401 en `/users/me` | JWT vencido o `SECRET_KEY` cambió | Login de nuevo, invalida token local |
+| Frontend pantalla negra | Error JS runtime | F12 → Console → mirar línea roja |
+| `/turn/setup` devuelve < 60 zonas | In-memory store desactualizado | `curl -X POST /turn/setup` o reiniciar backend |
+| Walker no publica | SA sin permiso `pubsub.publisher` | Comprueba `07_iam.tf` aplicado |
+| Dataflow no procesa | Worker SA sin acceso a Firestore | IAM: `roles/datastore.user` |
+| Cloud Run 403 | Público no permitido | `allUsers` con `roles/run.invoker` (ver `08_cloud_run.tf`) |
+| Firestore queries lentas | Índice compuesto faltante | Consola Firestore → Indexes → Create |
+| BigQuery "quota exceeded" | Streaming insert > 100 req/s | Batch con Dataflow |
+| `terraform apply` bloqueado | Lock en state | `terraform force-unlock <LOCK_ID>` |
+
+---
+
+## 15. Checklist de entrega
+
+- [ ] Este README actualizado y serverless-focused
+- [ ] 6 cuadernos en `notebooks/`: master + 4 por persona + adapt-to-team + anatomía
+- [ ] Tests verdes en CI (`.github/workflows/ci.yml`)
+- [ ] Deploy funcional en `cloudrisk-492619`
+- [ ] 6 PRs abiertas contra `DATA-PROJECT-2-EDEM`
+- [ ] Firestore con delete-protection + PITR + 1 export frozen
+- [ ] Terraform state con versioning activado en el bucket
+- [ ] Diagrama de arquitectura actualizado (`docs/architecture.svg`)
+- [ ] Presentación en `docs/CloudRISK_Presentacion.pptx`
+- [ ] Vídeo demo (~ 2 min) grabado
+
+---
+
+## 📚 Fuentes
+
+- [Repo del profesor Javi Briones](https://github.com/jabrio/Serverless_EDEM_2026) — metodología y case study de referencia
+- [Repo del profesor a10pepo (Terraform)](https://github.com/a10pepo/EDEM_MDA2526/tree/main/PROFESORES/MDA/TERRAFORM) — estilo modular de Terraform
+- [Profesora Adriana Campos](https://github.com/AdrianaC304)
+- [Repo oficial del equipo](https://github.com/alvarogimenezc/DATA-PROJECT-2-EDEM) — destino de las 6 PRs finales
+
+---
+
+## 🛡️ Licencia
+
+Proyecto educativo · EDEM 2025/2026 · Uso académico. Preguntar antes de reusar fuera de la cohorte.

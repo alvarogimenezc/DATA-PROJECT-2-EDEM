@@ -1,0 +1,45 @@
+{
+  "_comment": "Demo seed users. Loaded into the in-memory store on API startup when USE_LOCAL_STORE=1, and pushed to Firestore by scripts/sembrar_firestore.py. Edit freely; passwords are bcrypt-hashed at load time.",
+  "players": [
+    {
+      "id": "demo-player-001",
+      "name": "Comandante Norte",
+      "email": "norte@cloudrisk.app",
+      "password": "demo1234",
+      "clan_color": "#ff2d92",
+      "spawn_zone": "zona-borbot",
+      "starting_armies": 10,
+      "starting_gold": 500
+    },
+    {
+      "id": "demo-player-002",
+      "name": "Comandante Sur",
+      "email": "sur@cloudrisk.app",
+      "password": "demo1234",
+      "clan_color": "#caff33",
+      "spawn_zone": "zona-pinedo",
+      "starting_armies": 10,
+      "starting_gold": 500
+    },
+    {
+      "id": "demo-player-003",
+      "name": "Comandante Este",
+      "email": "este@cloudrisk.app",
+      "password": "demo1234",
+      "clan_color": "#00f0ff",
+      "spawn_zone": "zona-malva-rosa",
+      "starting_armies": 10,
+      "starting_gold": 500
+    },
+    {
+      "id": "demo-player-004",
+      "name": "Comandante Oeste",
+      "email": "oeste@cloudrisk.app",
+      "password": "demo1234",
+      "clan_color": "#a855f7",
+      "spawn_zone": "zona-benim\u00e0met",
+      "starting_armies": 10,
+      "starting_gold": 500
+    }
+  ]
+}
