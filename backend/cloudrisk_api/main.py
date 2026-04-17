@@ -1,27 +1,170 @@
 """
-CloudRISK Backend API.
-Punto de entrada FastAPI: monta los endpoints y expone Swagger en /api/v1/docs.
+CloudRISK / CloudRISK API — punto de entrada FastAPI.
+Expone los endpoints REST del juego bajo /api/v1 y un WebSocket en
+/ws/{user_id}. Implementa el contrato de 4 endpoints del equipo desde
+alvarogimenezc/DATA-PROJECT-2-EDEM más 25+ rutas internas para la
+experiencia enriquecida (combate con dados, turnos, misiones, clanes, etc.).
+
+EDEM. Máster Big Data & Cloud 2025/2026
+Profesores: Javi Briones y Adriana Campos
 """
-from fastapi import FastAPI, APIRouter
 
-from cloudrisk_api.endpoints import estado, acciones
+import logging
+import os
+from contextlib import asynccontextmanager
 
+from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+
+from cloudrisk_api.endpoints import (
+    ejercitos as armies,
+    batallas as battles,
+    clanes as clans,
+    misiones as missions,
+    multiplicadores as multipliers,
+    pasos as steps,
+    compatibilidad_equipo as team_compat,
+    turno as turn,
+    usuarios as users,
+    zonas as zones,
+)
+from cloudrisk_api.services.gestor_websocket import ConnectionManager
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("cloudrisk_api")
+
+manager = ConnectionManager()
 
 base_path = "/api/v1"
-router = APIRouter(prefix=base_path)
+api_router = APIRouter(prefix=base_path)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Contexto de lifespan (reemplaza al deprecado @app.on_event('startup')).
+    Ejecuta el seed al arrancar; no hace falta limpieza al apagar.
+    """
+    _run_startup_seed()
+    yield
+
 
 app = FastAPI(
-    title="CloudRISK Backend",
+    title="CloudRISK API",
+    description="Juego de estrategia con geolocalización real — La ciudad es tu campo de batalla",
     docs_url=f"{base_path}/docs",
-    swagger_ui_parameters={"displayRequestDuration": True},
     version="1.0.0",
+    lifespan=lifespan,
 )
 
+# CORS: 'allow_origins=*' es incompatible con 'allow_credentials=True' (los navegadores
+# lo rechazan). Como nuestro frontend no manda cookies (solo Bearer tokens en
+# localStorage), vamos con credentials=False y orígenes permisivos.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-@app.get("/health", tags=["health"], summary="Liveness probe")
-def health():
-    return {"status": "ok"}
+# Incluye todos los routers bajo /api/v1
+app.include_router(prefix=api_router.prefix, router=users.router)
+app.include_router(prefix=api_router.prefix, router=clans.router)
+app.include_router(prefix=api_router.prefix, router=zones.router)
+app.include_router(prefix=api_router.prefix, router=battles.router)
+app.include_router(prefix=api_router.prefix, router=steps.router)
+app.include_router(prefix=api_router.prefix, router=armies.router)
+app.include_router(prefix=api_router.prefix, router=multipliers.router)
+app.include_router(prefix=api_router.prefix, router=turn.router)
+app.include_router(prefix=api_router.prefix, router=team_compat.router)
+app.include_router(prefix=api_router.prefix, router=missions.router)
 
 
-app.include_router(prefix=router.prefix, router=estado.router)
-app.include_router(prefix=router.prefix, router=acciones.router)
+def _run_startup_seed() -> None:
+    """Siembra las zonas de Valencia al arrancar (store local o emulador Firestore)."""
+    if os.environ.get("USE_LOCAL_STORE", "0") == "1":
+        from cloudrisk_api.database.almacen_en_memoria import seed_zones, seed_demo_players
+        seed_zones()
+        seed_demo_players()
+    else:
+        # Siembra zonas en el emulador Firestore si la colección está vacía
+        try:
+            from cloudrisk_api.database.almacen_en_memoria import VALENCIA_ZONES
+            from cloudrisk_api.database import zonas as zonas_repo
+            existing = zonas_repo.list_zones()
+            if not existing:
+                from google.cloud import firestore
+                db = firestore.Client(project=os.environ.get("PROJECT_ID", "cloudrisk-local"))
+                col = os.environ.get("FIRESTORE_COLLECTION_ZONES", "zones")
+                for zone in VALENCIA_ZONES:
+                    db.collection(col).document(zone["id"]).set(zone)
+                print(f"[FIRESTORE] Seeded {len(VALENCIA_ZONES)} Valencia zones.")
+            else:
+                print(f"[FIRESTORE] Zones already seeded ({len(existing)} found).")
+        except Exception as e:
+            print(f"[FIRESTORE] Zone seeding skipped: {e}")
+
+        # Siembra jugadores demo con IDs fijos para que cuadre el orden de turnos de game_state
+        try:
+            from datetime import datetime
+            from passlib.context import CryptContext
+            from google.cloud import firestore
+            from cloudrisk_api.configuracion import settings
+
+            DEMO_PLAYERS = [
+                {"id": "demo-player-001", "name": "Comandante Norte", "email": "norte@cloudrisk.app", "password": "demo1234", "gold": 500},
+                {"id": "demo-player-002", "name": "Comandante Sur",   "email": "sur@cloudrisk.app",   "password": "demo1234", "gold": 500},
+                {"id": "demo-player-003", "name": "Comandante Este",  "email": "este@cloudrisk.app",  "password": "demo1234", "gold": 500},
+                {"id": "demo-player-004", "name": "Comandante Oeste", "email": "oeste@cloudrisk.app", "password": "demo1234", "gold": 500},
+            ]
+            pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            db = firestore.Client(project=os.environ.get("PROJECT_ID", "cloudrisk-local"))
+            col = settings.FIRESTORE_COLLECTION_USERS
+            created = 0
+            for p in DEMO_PLAYERS:
+                doc_ref = db.collection(col).document(p["id"])
+                if not doc_ref.get().exists:
+                    doc_ref.set({
+                        "id": p["id"],
+                        "name": p["name"],
+                        "email": p["email"],
+                        "hashed_password": pwd_ctx.hash(p["password"]),
+                        "clan_id": None,
+                        "steps_total": 0,
+                        "power_points": 0,
+                        "gold": p["gold"],
+                        "level": 1,
+                        "created_at": datetime.utcnow().isoformat(),
+                    })
+                    created += 1
+            print(f"[FIRESTORE] Seeded {created} demo players.")
+        except Exception as e:
+            print(f"[FIRESTORE] Player seeding skipped: {e}")
+
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await manager.connect(websocket, user_id)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            event = data.get("event")
+            if event == "location_update":
+                await zones.handle_location_update(
+                    user_id=user_id, lat=data["lat"], lng=data["lng"], manager=manager,
+                )
+            elif event == "step_update":
+                await steps.handle_step_update(
+                    user_id=user_id, steps=data["steps"],
+                )
+    except WebSocketDisconnect:
+        manager.disconnect(user_id)
+    except Exception as exc:
+        logger.warning(f"WebSocket error for {user_id}: {exc}")
+        manager.disconnect(user_id)
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "cloudrisk-api"}

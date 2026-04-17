@@ -105,7 +105,7 @@ export default function BattlePanel({ onClose, currentZone }) {
     if (!currentZone) return
     setError('')
     try {
-      const res = await api.post(`/api/v1/battles/?zone_id=${currentZone.id}`)
+      const res = await api.post('/api/v1/battles/', { zone_id: currentZone.id })
       setBattles(b => [res.data, ...b])
     } catch (err) {
       setError(err.response?.data?.detail || 'No se pudo iniciar la ofensiva')
