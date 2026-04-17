@@ -1,0 +1,205 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body {
+  font-size: 17px;
+  background: #06070d;
+  margin: 0;
+  padding: 0;
+}
+
+/* Reset botones dentro de la app — necesario porque preflight está desactivado */
+.up-root button {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+}
+
+.up-root {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: #06070d;
+  color: #fff;
+}
+.up-root * { box-sizing: border-box; }
+
+/* ── Runner Parade Animations ── */
+@keyframes up-runner-cross-ltr {
+  from { transform: translateX(-140px); }
+  to   { transform: translateX(calc(100vw + 140px)); }
+}
+@keyframes up-runner-cross-rtl {
+  from { transform: translateX(calc(100vw + 140px)); }
+  to   { transform: translateX(-140px); }
+}
+@keyframes up-runner-bob {
+  from { transform: translateY(0px); }
+  to   { transform: translateY(-9px); }
+}
+/* ── ARMS: +angle = clockwise = elbow goes RIGHT = FORWARD for LTR ── */
+/* left arm: FORWARD at t=0 (left leg is back → opposite limb forward) */
+@keyframes up-arm-l {
+  from { transform: rotate(55deg); }
+  to   { transform: rotate(-30deg); }
+}
+/* right arm: BACK at t=0 (right leg is forward → opposite limb back) */
+@keyframes up-arm-r {
+  from { transform: rotate(-30deg); }
+  to   { transform: rotate(55deg); }
+}
+
+/* ── THIGHS: +angle = clockwise = knee goes RIGHT = FORWARD for LTR ── */
+/* left thigh: BACK at t=0 (-20°) → swings to FORWARD (+42°) */
+@keyframes up-thigh-l {
+  from { transform: rotate(-20deg); }
+  to   { transform: rotate(42deg); }
+}
+/* right thigh: FORWARD at t=0 (+42°) → swings to BACK (-20°) */
+@keyframes up-thigh-r {
+  from { transform: rotate(42deg); }
+  to   { transform: rotate(-20deg); }
+}
+
+/* ── SHINS: negative = bends behind the knee (backward of travel direction) ── */
+/* left shin: nearly straight at t=0 (stance/back leg) */
+@keyframes up-shin-l {
+  from { transform: rotate(-5deg); }
+  to   { transform: rotate(-52deg); }
+}
+/* right shin: bent at t=0 (swing/forward leg — knee high, shin trails) */
+@keyframes up-shin-r {
+  from { transform: rotate(-52deg); }
+  to   { transform: rotate(-5deg); }
+}
+
+/* ── HEARTBEAT PULSE for neon blobs ── */
+@keyframes up-heartbeat-pink {
+  0%, 100% { transform: scale(1);    opacity: 0.32; }
+  8%        { transform: scale(1.20); opacity: 0.62; }
+  16%       { transform: scale(0.96); opacity: 0.22; }
+  24%       { transform: scale(1.12); opacity: 0.50; }
+  32%       { transform: scale(1);    opacity: 0.32; }
+}
+@keyframes up-heartbeat-green {
+  0%, 100% { transform: scale(1);    opacity: 0.45; }
+  8%        { transform: scale(1.22); opacity: 0.80; }
+  16%       { transform: scale(0.96); opacity: 0.30; }
+  24%       { transform: scale(1.14); opacity: 0.65; }
+  32%       { transform: scale(1);    opacity: 0.45; }
+}
+
+/* ── ECG line animation ── */
+@keyframes up-ecg {
+  0%   { stroke-dashoffset: 220; }
+  80%  { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: 0; }
+}
+
+/* Map zone markers and badges are now rendered entirely by MapLibre symbol /
+   circle layers (collision-aware), so no DOM markers remain. */
+
+/* ══════════════════════════════════════════════════════════
+   BATTLEFIELD MAP EFFECTS
+   ══════════════════════════════════════════════════════════ */
+
+/* Scan lines — tactical display texture on map */
+@keyframes up-scanlines-scroll {
+  from { background-position: 0 0; }
+  to   { background-position: 0 80px; }
+}
+.up-scanlines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0,0,0,0.06) 1px,
+    transparent 1px,
+    transparent 5px
+  );
+  animation: up-scanlines-scroll 14s linear infinite;
+}
+
+/* Owned zone badge — pulsing ring (faction color via CSS var) */
+.up-zone-badge {
+  position: relative; /* needed for ::after */
+}
+.up-zone-badge--owned::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 16px;
+  border: 1.5px solid var(--ring-color, #f43f5e);
+  animation: up-badge-ring 2.4s ease-out infinite;
+  pointer-events: none;
+}
+@keyframes up-badge-ring {
+  0%   { transform: scale(1);   opacity: 0.85; }
+  100% { transform: scale(2.0); opacity: 0; }
+}
+
+/* ══════════════════════════════════════════════════════════
+   RUN MODE — high contrast while running outdoors
+   ══════════════════════════════════════════════════════════ */
+.up-run-mode .up-zone-badge {
+  font-size: 17px;
+  min-width: 36px;
+  height: 30px;
+  border-radius: 15px;
+  border-width: 2px;
+}
+.up-run-mode .up-zone-name {
+  font-size: 14px;
+  letter-spacing: 0.7px;
+  text-shadow: 0 0 8px #000, 0 0 14px #000, 0 0 4px #000;
+}
+
+/* ══════════════════════════════════════════════════════════
+   REWARD BURST PARTICLES
+   ══════════════════════════════════════════════════════════ */
+@keyframes up-burst-float {
+  0%   { opacity: 0;   transform: translate(var(--bx,0px), 0px) scale(0.2); }
+  18%  { opacity: 1;   transform: translate(calc(var(--bx,0px) * 0.5), -18px) scale(1.15); }
+  80%  { opacity: 0.85; }
+  100% { opacity: 0;   transform: translate(var(--bx,0px), var(--by,-80px)) scale(0.85); }
+}
+
+/* Maplibre overrides for neon */
+.up-root .maplibregl-ctrl-group {
+  background: rgba(15,15,30,0.9) !important;
+  border: 1px solid rgba(255,45,146,0.4) !important;
+  border-radius: 10px !important;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+}
+.up-root .maplibregl-ctrl-group button {
+  background: transparent !important;
+  border-color: rgba(255,255,255,0.1) !important;
+  width: 36px !important;
+  height: 36px !important;
+  cursor: pointer !important;
+  color: rgba(255,255,255,0.9) !important;
+  font-weight: bold;
+}
+.up-root .maplibregl-ctrl-group button:hover {
+  background: rgba(202,255,51,0.15) !important;
+  color: #facc15 !important;
+}
+/* Los iconos +/- de MapLibre vienen como SVG con `fill: currentColor`.
+   Antes les aplicábamos filter:invert() lo que los volvía negros sobre
+   fondo oscuro → invisibles. Los dejamos blancos por defecto. */
+.up-root .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: brightness(0) invert(1) !important; /* fuerza blanco puro */
+  opacity: 0.85;
+}
+.up-root .maplibregl-ctrl-group button:hover .maplibregl-ctrl-icon {
+  opacity: 1;
+}
