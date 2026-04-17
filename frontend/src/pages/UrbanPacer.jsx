@@ -17,13 +17,13 @@ import { motion, AnimatePresence } from 'framer-motion'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
-  Activity, Award, Bolt, Coins, Crown, Footprints, Gift, Map as MapIcon,
-  Medal, Play, Power, Settings, ShoppingBag, Sparkles, Target, Trophy,
+  Activity, Bolt, Crown, Footprints, Gift, Map as MapIcon,
+  Medal, Play, Power, Target, Trophy,
   X, Zap, ChevronLeft, Flame, TrendingUp, Swords, Shield, Plus, Minus,
-  Dices, BookOpen, ChevronRight, Send, Trash2,
+  BookOpen, ChevronRight, Send,
   // Iconos para carruseles (reemplazan emojis — monocromo, coloreable)
   Calendar, Repeat, Mountain, MessageCircle, Timer, Utensils, Pill,
-  Droplet, Clock, Moon, Snowflake, Flag, Lightbulb, Heart,
+  Droplet, Clock, Moon, Snowflake, Flag, Lightbulb,
   Users, MapPin, Bed, TrendingDown, Gauge,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -1906,19 +1906,6 @@ function WsIndicator({ status }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Skeleton row for Dashboard lists while loading
-// ─────────────────────────────────────────────────────────────
-function SkeletonRow({ color = '#ffffff20' }) {
-  return (
-    <div className="flex items-center gap-2 animate-pulse">
-      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: color }} />
-      <span className="flex-1 h-3 rounded" style={{ background: color }} />
-      <span className="w-8 h-3 rounded" style={{ background: color }} />
-    </div>
-  )
-}
-
-// ─────────────────────────────────────────────────────────────
 // Right Panel — Tabs: Misiones | Batallas | Top
 // ─────────────────────────────────────────────────────────────
 const ICON_MAP = { Footprints, Crown, Swords, Zap, MapIcon: MapIcon, Flame, Target, Trophy }
@@ -2759,7 +2746,7 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
                   color: '#c8ff00',
                 }}
               >
-                Nv.{player.level}
+                Nv.{player.level || 1}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-1.5">

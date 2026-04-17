@@ -1,0 +1,396 @@
+"""Turn state + setup + reinforcements endpoints (CloudRISK v3 Clustered Risk)."""
+from __future__ import annotations
+
+import json
+import math
+import random
+import unicodedata
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from cloudrisk_api.configuracion import settings
+from cloudrisk_api.database import usuarios as usuarios_repo, zonas as zonas_repo
+from cloudrisk_api.services.autenticacion import get_current_user
+from cloudrisk_api.services import estado_juego as game_state
+
+
+# ─── GeoJSON de Valencia cargado del frontend/public (single source of truth) ──
+_GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_barrios_clean.geojson"
+_CENTROID_CACHE: dict[str, tuple[float, float]] | None = None
+
+
+def _slugify(name: str) -> str:
+    """Normaliza un nombre de barrio a id tipo 'zona-el-carme'."""
+    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
+    s = s.lower().replace("'", "").replace("·", "")
+    s = "".join(c if c.isalnum() or c == " " else "" for c in s)
+    s = "-".join(s.split())
+    return f"zona-{s}"
+
+
+def _load_centroids() -> dict[str, tuple[float, float]]:
+    """Lee el geojson del frontend y devuelve {zone_id: (lat, lng)}."""
+    global _CENTROID_CACHE
+    if _CENTROID_CACHE is not None:
+        return _CENTROID_CACHE
+    if not _GEOJSON_PATH.exists():
+        return {}
+    data = json.loads(_GEOJSON_PATH.read_text(encoding="utf-8"))
+    out: dict[str, tuple[float, float]] = {}
+    for feat in data.get("features", []):
+        name = feat.get("properties", {}).get("name")
+        geom = feat.get("geometry") or {}
+        if not name or not geom.get("coordinates"):
+            continue
+        t = geom.get("type")
+        if t == "Polygon":
+            rings = [geom["coordinates"]]
+        elif t == "MultiPolygon":
+            rings = geom["coordinates"]
+        else:
+            continue
+        lats, lngs = [], []
+        for poly in rings:
+            if not poly:
+                continue
+            for pt in poly[0]:
+                if len(pt) >= 2:
+                    lngs.append(pt[0])
+                    lats.append(pt[1])
+        if lats:
+            out[_slugify(name)] = (sum(lats) / len(lats), sum(lngs) / len(lngs))
+    _CENTROID_CACHE = out
+    return out
+
+
+router = APIRouter(prefix="/turn", tags=["turn"])
+
+
+# ─── Constants extraídas de settings para claridad ──────────────────────
+MIN_ARMIES_PER_ZONE = settings.INITIAL_ARMIES_PER_ZONE   # 2 tropas/zona al setup
+STARTING_POOL = settings.STARTING_ARMIES_POOL            # 30 armies iniciales
+MIN_TURN_BONUS = settings.MIN_TURN_BONUS                 # 3 armies mínimo por turno
+ZONES_PER_BONUS = settings.ZONES_PER_BONUS_ARMY          # 1 army cada 3 zonas
+
+# ─── Clustering parameters ──────────────────────────────────────────────
+ZONES_PER_PLAYER_TARGET = 15   # aprox. zonas que recibe cada jugador
+MIN_SEED_DISTANCE = 0.03        # ~3 km en grados lat/lng (evitar semillas pegadas)
+
+
+# ─── Helpers geográficos ────────────────────────────────────────────────
+
+def _zone_centroid(zone: dict) -> tuple[float, float] | None:
+    """
+    Devuelve el centroide (lat, lng) de una zona.
+    Primera intención: usar el geojson embebido. Si está vacío (caso
+    in-memory store), cae al cache cargado desde el archivo del frontend.
+    """
+    geojson = zone.get("geojson")
+    if geojson:
+        t = geojson.get("type")
+        rings = (
+            [geojson["coordinates"]] if t == "Polygon"
+            else geojson["coordinates"] if t == "MultiPolygon"
+            else None
+        )
+        if rings:
+            lats, lngs = [], []
+            for poly in rings:
+                if not poly:
+                    continue
+                for pt in poly[0]:
+                    if len(pt) >= 2:
+                        lngs.append(pt[0])
+                        lats.append(pt[1])
+            if lats:
+                return (sum(lats) / len(lats), sum(lngs) / len(lngs))
+
+    # Fallback: buscar por id en el cache del geojson del frontend
+    centroids = _load_centroids()
+    return centroids.get(zone["id"])
+
+
+def _distance(c1: tuple[float, float], c2: tuple[float, float]) -> float:
+    return math.sqrt((c1[0] - c2[0]) ** 2 + (c1[1] - c2[1]) ** 2)
+
+
+def _pick_four_spread_seeds(zones_with_centroid: list[tuple[dict, tuple[float, float]]],
+                             rng: random.Random) -> list[dict]:
+    """
+    Elige 4 semillas (una por jugador) que estén razonablemente separadas.
+    Estrategia:
+      1. Ordenar todas las zonas por lat (norte → sur).
+      2. Tomar muestra aleatoria de los cuartiles norte, sur, este, oeste.
+      3. Verificar que las 4 semillas están a mínimo MIN_SEED_DISTANCE entre sí.
+      4. Si no, reintentar hasta MAX_RETRIES.
+    """
+    # Dividir por cuartiles geográficos
+    by_lat = sorted(zones_with_centroid, key=lambda x: x[1][0])   # sur → norte
+    by_lng = sorted(zones_with_centroid, key=lambda x: x[1][1])   # oeste → este
+    n = len(by_lat)
+
+    # Cuartiles: norte = último 25%, sur = primero 25%, este = último 25% por lng, etc.
+    norte_pool = by_lat[int(n * 0.75):]    # lat alta
+    sur_pool   = by_lat[:int(n * 0.25)]    # lat baja
+    este_pool  = by_lng[int(n * 0.75):]    # lng alta (este es lng +)
+    oeste_pool = by_lng[:int(n * 0.25)]    # lng baja
+
+    for _ in range(50):  # reintentos
+        seeds = [
+            rng.choice(norte_pool),
+            rng.choice(sur_pool),
+            rng.choice(este_pool),
+            rng.choice(oeste_pool),
+        ]
+        # dedup por id — puede que una zona caiga en dos cuartiles
+        seen: set[str] = set()
+        unique_seeds: list[tuple[dict, tuple[float, float]]] = []
+        for s in seeds:
+            if s[0]["id"] not in seen:
+                seen.add(s[0]["id"])
+                unique_seeds.append(s)
+        if len(unique_seeds) < 4:
+            continue
+        # verificar separación mínima
+        ok = True
+        for i in range(len(unique_seeds)):
+            for j in range(i + 1, len(unique_seeds)):
+                if _distance(unique_seeds[i][1], unique_seeds[j][1]) < MIN_SEED_DISTANCE:
+                    ok = False
+                    break
+            if not ok:
+                break
+        if ok:
+            return [z for z, _ in unique_seeds]
+
+    # Fallback: si no encontramos buenas semillas, usa las 4 más separadas posibles
+    return [by_lat[-1][0], by_lat[0][0], by_lng[-1][0], by_lng[0][0]]
+
+
+# ─── Business logic helpers ─────────────────────────────────────────────
+
+def _compute_zone_bonus(player_id: str) -> tuple[int, int]:
+    """max(MIN, zones_owned // ZONES_PER_BONUS). Risk rule."""
+    zones = zonas_repo.list_zones()
+    owned = sum(1 for z in zones if z.get("owner_clan_id") == player_id)
+    bonus = max(MIN_TURN_BONUS, owned // ZONES_PER_BONUS)
+    return bonus, owned
+
+
+def _grant_turn_bonus(player_id: str) -> dict:
+    """Acredita al jugador sus refuerzos de turno como power_points."""
+    bonus, owned = _compute_zone_bonus(player_id)
+    user = usuarios_repo.get_user_by_id(player_id) or {}
+    current = int(user.get("power_points") or 0)
+    new_power = current + bonus
+    usuarios_repo.update_user(player_id, {"power_points": new_power})
+    return {"bonus_armies": bonus, "zones_owned": owned,
+            "power_before": current, "power_after": new_power}
+
+
+# ─── Endpoints ──────────────────────────────────────────────────────────
+
+@router.get("/")
+def get_turn():
+    """Estado del turno actual. Frontend lo pollea cada pocos segundos."""
+    return game_state.current().to_dict()
+
+
+@router.get("/reinforcements")
+def reinforcements(current_user: dict = Depends(get_current_user)):
+    """
+    Explica el cálculo de refuerzos del jugador autenticado.
+    Útil para que el frontend muestre un desglose tipo:
+        "Tienes 27 armies: 7 por 22 zonas + 20 por 10k pasos."
+    """
+    bonus, owned = _compute_zone_bonus(current_user["id"])
+    steps = int(current_user.get("steps_total") or 0)
+    power_points = int(current_user.get("power_points") or 0)
+    return {
+        "available_now": power_points,
+        "next_turn_zone_bonus": bonus,
+        "zones_owned": owned,
+        "total_steps": steps,
+        "formula": {
+            "zone_bonus": f"max({MIN_TURN_BONUS}, {owned}/{ZONES_PER_BONUS}) = {bonus}",
+            "steps_to_armies": f"1 army cada {settings.POWER_PER_STEPS} pasos",
+        },
+    }
+
+
+@router.post("/advance_phase")
+def advance_phase(current_user: dict = Depends(get_current_user)):
+    """Avanza a la siguiente fase del turno (reinforce → attack → fortify)."""
+    state = game_state.current()
+    if state.current_player_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="It's not your turn")
+    return game_state.advance_phase().to_dict()
+
+
+@router.post("/end")
+def end_turn(current_user: dict = Depends(get_current_user)):
+    """
+    Termina tu turno. El backend rota al siguiente jugador Y LE CONCEDE
+    sus refuerzos automáticamente (Risk rule: max(3, zones/3) armies).
+    """
+    state = game_state.current()
+    if state.current_player_id != current_user["id"]:
+        raise HTTPException(status_code=403, detail="It's not your turn")
+    new_state = game_state.end_turn()
+    bonus_info = _grant_turn_bonus(new_state.current_player_id)
+    return {**new_state.to_dict(), "bonus_granted": bonus_info}
+
+
+# ─── CloudRISK v3 setup — "Clustered Risk" rules ────────────────────────
+
+@router.post("/setup", tags=["setup"])
+def setup_game(current_user: dict = Depends(get_current_user)):
+    """
+    Fase de preparación v3 (Clustered Risk).
+
+    Pasos:
+        1. Calcula el centroide (lat, lng) de cada zona desde su geojson.
+        2. Elige 4 semillas geográficamente SEPARADAS (una norte, sur,
+           este, oeste) — son los centros iniciales de cada jugador.
+        3. Para cada zona no-semilla, encuentra su semilla más cercana.
+           Asigna las ZONES_PER_PLAYER_TARGET (15) zonas más cercanas a
+           cada semilla. Las demás quedan LIBRES (owner_clan_id=None,
+           defense_level=0).
+        4. Coloca MIN_ARMIES_PER_ZONE armies en cada zona asignada.
+           Las libres se quedan a 0 armies (se reclaman con /actions/place).
+        5. Cada jugador recibe STARTING_POOL (20) armies como power_points
+           para desplegar donde quiera (reforzar o reclamar zonas libres).
+        6. Resetea el turno: Norte, fase reinforce, turno 1.
+
+    Resultado: ~60 zonas repartidas (15 por jugador, clusterizadas) +
+    ~26 zonas libres que cualquiera puede reclamar en su turno.
+
+    Idempotente. Cualquier demo player autenticado puede llamarlo.
+    """
+    zones = zonas_repo.list_zones()
+    if not zones:
+        raise HTTPException(status_code=500, detail="No zones seeded")
+
+    rng = random.Random()
+
+    # Paso 1 — centroides
+    zones_with_centroid: list[tuple[dict, tuple[float, float]]] = []
+    skipped_no_geo = 0
+    for z in zones:
+        c = _zone_centroid(z)
+        if c is None:
+            skipped_no_geo += 1
+            continue
+        zones_with_centroid.append((z, c))
+
+    if len(zones_with_centroid) < 10:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Too few zones with geojson to cluster ({len(zones_with_centroid)})",
+        )
+
+    # Paso 2 — 4 semillas separadas
+    seeds = _pick_four_spread_seeds(zones_with_centroid, rng)
+    seed_centroids = [_zone_centroid(s) for s in seeds]
+    order = game_state.DEFAULT_PLAYER_ORDER
+    seed_owners = dict(zip(order, seeds))    # player_id → seed zone
+
+    # Paso 3 — para cada zona, calcular distancia a cada semilla
+    # Luego asignar las 15 más cercanas a cada semilla en orden de prioridad.
+    non_seed_centroids: list[tuple[dict, tuple[float, float]]] = [
+        (z, c) for z, c in zones_with_centroid if z["id"] not in {s["id"] for s in seeds}
+    ]
+
+    # Calcular distancias (zona_id → lista de (dist, player_idx))
+    distances: dict[str, list[tuple[float, int]]] = {}
+    for zone, centroid in non_seed_centroids:
+        dists = [(
+            _distance(centroid, seed_centroids[i]),
+            i,
+        ) for i in range(len(order))]
+        dists.sort()    # ascending
+        distances[zone["id"]] = dists
+
+    # Asignación greedy: cada jugador "pide" de a una las zonas más cercanas
+    # que no hayan sido tomadas, hasta llegar a ZONES_PER_PLAYER_TARGET - 1
+    # (ya tienen su semilla).
+    assignments: dict[str, list[str]] = {p: [seed_owners[p]["id"]] for p in order}
+    taken: set[str] = {seed_owners[p]["id"] for p in order}
+    # Lista ordenada de candidatos por jugador: zona_id → prioridad asc
+    candidates: dict[int, list[tuple[float, str]]] = {i: [] for i in range(len(order))}
+    for zone_id, dists in distances.items():
+        for dist, player_idx in dists:
+            candidates[player_idx].append((dist, zone_id))
+    for pidx in candidates:
+        candidates[pidx].sort()
+
+    target = ZONES_PER_PLAYER_TARGET
+    # round-robin pick hasta que cada jugador tenga target zonas o se acabe
+    progress = [0] * len(order)   # por jugador, puntero dentro de candidates
+    done = False
+    while not done:
+        done = True
+        for pidx, player_id in enumerate(order):
+            if len(assignments[player_id]) >= target:
+                continue
+            # buscar el siguiente candidato no tomado
+            while progress[pidx] < len(candidates[pidx]):
+                _, zid = candidates[pidx][progress[pidx]]
+                progress[pidx] += 1
+                if zid not in taken:
+                    assignments[player_id].append(zid)
+                    taken.add(zid)
+                    done = False
+                    break
+
+    # Paso 4 — aplicar updates a Firestore / in-memory store
+    now_iso = datetime.now(timezone.utc).isoformat()
+    all_cluster_ids = {z["id"] for z, _ in zones_with_centroid}
+    for zone_id, player_id in [(zid, p) for p, ids in assignments.items() for zid in ids]:
+        zonas_repo.update_zone(zone_id, {
+            "owner_clan_id": player_id,
+            "defense_level": MIN_ARMIES_PER_ZONE,
+            "conquered_at": now_iso,
+        })
+    # Zonas no asignadas EN EL CLUSTERING → libres
+    free_in_cluster = all_cluster_ids - taken
+    # Zonas SIN geojson (no pudieron clusterizarse) → también libres
+    all_db_ids = {z["id"] for z in zones}
+    free_no_geo = all_db_ids - all_cluster_ids
+    free_ids = free_in_cluster | free_no_geo
+    for zid in free_ids:
+        zonas_repo.update_zone(zid, {
+            "owner_clan_id": None,
+            "defense_level": 0,
+            "conquered_at": None,
+        })
+
+    # Paso 5 — pool inicial
+    for pid in order:
+        usuarios_repo.update_user(pid, {"power_points": STARTING_POOL})
+
+    # Paso 6 — reset turno
+    game_state.reset()
+
+    return {
+        "status": "ok",
+        "rule": "CloudRISK v3 · Clustered Risk — territorios cercanos + zonas libres",
+        "setup": {
+            "zones_per_player": {p: len(v) for p, v in assignments.items()},
+            "free_zones_total": len(free_ids),
+            "free_by_cluster_miss": len(free_in_cluster),
+            "free_by_no_geojson":   len(free_no_geo),
+            "total_zones_in_db":     len(zones),
+            "armies_per_owned_zone": MIN_ARMIES_PER_ZONE,
+            "starting_pool_per_player": STARTING_POOL,
+            "seeds": {p: seed_owners[p]["id"] for p in order},
+        },
+        "per_turn_formula": {
+            "zone_bonus": f"max({MIN_TURN_BONUS}, zones/{ZONES_PER_BONUS})",
+            "step_bonus": f"floor(steps / {settings.POWER_PER_STEPS})",
+        },
+        "starts": order[0],
+        "phase": "reinforce",
+    }
