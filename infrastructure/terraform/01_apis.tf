@@ -23,7 +23,6 @@ resource "google_project_service" "apis" {
     "bigquery.googleapis.com",          # BigQuery (data warehouse)
     "secretmanager.googleapis.com",     # Secret Manager (secretos cifrados)
     "artifactregistry.googleapis.com",  # Artifact Registry (Docker registry)
-    "cloudbuild.googleapis.com",        # Cloud Build (CI/CD)
     "dataflow.googleapis.com",          # Dataflow (Beam streaming)
     "iam.googleapis.com",               # IAM (permisos)
     "cloudscheduler.googleapis.com",    # Cron jobs serverless

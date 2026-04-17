@@ -69,8 +69,12 @@ python bot_ia_riesgo.py --api http://localhost:8080
 # Bots contra backend desplegado en Cloud Run
 python bot_ia_riesgo.py --api https://cloudrisk-backend-xxxxx.run.app
 
-# Deploy del Cloud Run Job (usa el script del equipo)
-bash CICD/desplegar_manual.sh walker
+# Deploy del Cloud Run Job — build + update manual
+gcloud builds submit data_generator/ \
+  --tag europe-west1-docker.pkg.dev/$PROJECT_ID/cloudrisk/walker:latest
+gcloud run jobs update cloudrisk-walker \
+  --image europe-west1-docker.pkg.dev/$PROJECT_ID/cloudrisk/walker:latest \
+  --region europe-west1
 
 # Disparar el Job ya desplegado
 gcloud run jobs execute cloudrisk-walker --region europe-west1

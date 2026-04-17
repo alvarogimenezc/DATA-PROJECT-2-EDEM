@@ -35,7 +35,7 @@ data/random_tracker_mapping.json ─▶  steps_ingestor/*.py  (resolver user →
 ```
 
 - **No se despliega a ningún servicio**: solo se lee desde scripts que corren en tu máquina o en un Cloud Run Job.
-- Si cambias algo aquí, re-ejecuta `bash CICD/sembrar_demo.sh` para propagarlo a Firestore.
+- Si cambias algo aquí, re-ejecuta `python scripts/sembrar_demo.py --project <ID>` para propagarlo a Firestore.
 
 ## 🚀 Cómo ejecutarlo
 
@@ -52,10 +52,10 @@ python steps_ingestor/recolector_pasos_diario.py --local-file data/mock_tracker_
 python -m json.tool data/demo_game_state.json > /dev/null && echo OK
 
 # Tras editar: re-sembrar para que los cambios entren en Firestore
-bash CICD/sembrar_demo.sh cloudrisk-492619
+python scripts/sembrar_demo.py --project cloudrisk-492619
 
-# Verificar que el seed quedó bien
-bash CICD/verificar_demo.sh cloudrisk-492619
+# Verificar que el seed quedó bien (dry-run que compara)
+python scripts/sembrar_demo.py --project cloudrisk-492619 --dry-run
 ```
 
 **Reglas de oro del equipo:**
