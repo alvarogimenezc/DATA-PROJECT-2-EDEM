@@ -1,5 +1,6 @@
-# steps_ingestor — imagen que sirve tanto el fetcher (job) como el scorer (service).
-# Mismo artefacto, entrypoint distinto según el servicio Cloud Run que apunte aquí.
+# steps_ingestor — Cloud Run Job que corre el fetcher diario.
+# El scoring horario fue eliminado al absorber su lógica en el pipeline
+# Dataflow unificado (pipelines/cloudrisk_unified.py).
 
 FROM python:3.12-slim
 
@@ -11,7 +12,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Por defecto levanta el scorer (Cloud Run Service). El Job fetcher sobreescribe
-# el command con "python recolector_pasos_diario.py".
-ENV PORT=8080
-CMD ["sh", "-c", "uvicorn puntuador_horario:app --host 0.0.0.0 --port ${PORT}"]
+# Entrypoint por defecto del Job diario.
+CMD ["python", "recolector_pasos_diario.py"]

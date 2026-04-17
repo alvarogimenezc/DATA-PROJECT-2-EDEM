@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from cloudrisk_api.configuracion import settings
 from cloudrisk_api.database import usuarios as usuarios_repo, zonas as zonas_repo
 from cloudrisk_api.services.autenticacion import get_current_user
 from cloudrisk_api.services import estado_juego as game_state
+
+USE_LOCAL = os.environ.get("USE_LOCAL_STORE", "0") == "1"
 
 
 # ─── GeoJSON de Valencia cargado del frontend/public (single source of truth) ──
@@ -246,7 +250,10 @@ def end_turn(current_user: dict = Depends(get_current_user)):
 # ─── CloudRISK v3 setup — "Clustered Risk" rules ────────────────────────
 
 @router.post("/setup", tags=["setup"])
-def setup_game(current_user: dict = Depends(get_current_user)):
+def setup_game(
+    x_scheduler_token: Optional[str] = Header(None, alias="X-Scheduler-Token"),
+    current_user: dict = Depends(get_current_user),
+):
     """
     Fase de preparación v3 (Clustered Risk).
 
@@ -267,8 +274,15 @@ def setup_game(current_user: dict = Depends(get_current_user)):
     Resultado: ~60 zonas repartidas (15 por jugador, clusterizadas) +
     ~26 zonas libres que cualquiera puede reclamar en su turno.
 
-    Idempotente. Cualquier demo player autenticado puede llamarlo.
+    Seguridad: fuera de USE_LOCAL_STORE=1 el endpoint exige también
+    X-Scheduler-Token (Cloud Scheduler / ops) para evitar que cualquier
+    jugador autenticado resetee la partida en demo/producción.
     """
+    # En prod: se requiere el token de ops además del usuario logueado.
+    # En local: permitimos cualquier usuario autenticado para que los
+    # scripts de data_generator y los tests sigan funcionando sin token.
+    if not USE_LOCAL and x_scheduler_token != settings.SCHEDULER_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden: scheduler token required")
     zones = zonas_repo.list_zones()
     if not zones:
         raise HTTPException(status_code=500, detail="No zones seeded")

@@ -4,7 +4,7 @@
 # │ Cloud Run corre contenedores Docker con 2 modos:                        │
 # │                                                                         │
 # │   SERVICE: stateless HTTP, escala a cero, responde peticiones.          │
-# │            -> backend, frontend, dashboard, ingestors                   │
+# │            -> backend, frontend, ingestors                              │
 # │                                                                         │
 # │   JOB:     batch one-shot o cron, no recibe HTTP, corre y muere.        │
 # │            -> walker (simula pasos y publica a Pub/Sub)                 │
@@ -130,48 +130,10 @@ resource "google_cloud_run_v2_service_iam_member" "web_public" {
 }
 
 # =============================================================================
-# SERVICE 3: cloudrisk-dashboard (Streamlit KPIs)
+# NOTA: el antiguo servicio Streamlit `cloudrisk-dashboard` se eliminó al
+# consolidar la analítica en el frontend React (endpoints /analytics/* del
+# backend FastAPI sobre BigQuery).
 # =============================================================================
-resource "google_cloud_run_v2_service" "dashboard" {
-  name     = "cloudrisk-dashboard"
-  location = var.region
-
-  template {
-    containers {
-      image = "${local.docker_registry}/dashboard:latest"
-
-      env {
-        name  = "PROJECT_ID"
-        value = var.project_id
-      }
-      env {
-        name  = "BIGQUERY_DATASET"
-        value = google_bigquery_dataset.cloudrisk.dataset_id
-      }
-
-      resources {
-        limits = {
-          cpu    = "1"
-          memory = "512Mi"
-        }
-      }
-    }
-
-    scaling {
-      min_instance_count = 0
-      max_instance_count = 3
-    }
-  }
-
-  depends_on = [google_project_service.apis]
-}
-
-resource "google_cloud_run_v2_service_iam_member" "dashboard_public" {
-  location = var.region
-  name     = google_cloud_run_v2_service.dashboard.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
 
 # =============================================================================
 # SERVICE 4: cloudrisk-air-ingestor (Alvaro — calidad_aire.py)

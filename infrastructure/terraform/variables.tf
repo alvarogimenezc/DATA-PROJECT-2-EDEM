@@ -44,3 +44,31 @@ variable "jwt_secret" {
   type        = string
   sensitive   = true
 }
+
+# ─── Parámetros del pipeline unificado (stateful DoFn) ──────────────────────
+# Consumidos por el job Dataflow. Cámbialos sin re-deploy del pipeline: el
+# runtime lee estos valores del parameters{} del flex template job.
+
+variable "power_per_steps" {
+  description = "Número de pasos que equivalen a 1 army en el scoring"
+  type        = number
+  default     = 500
+}
+
+variable "daily_army_cap" {
+  description = "Máximo de armies ganables por pasos en un día (por usuario)"
+  type        = number
+  default     = 50
+}
+
+variable "max_speed_kmh" {
+  description = "Velocidad máxima aceptada; eventos por encima van a DLQ (anti-trampa)"
+  type        = number
+  default     = 15
+}
+
+variable "daily_steps_cap" {
+  description = "Máximo de pasos/día aceptados por usuario (anti-trampa). El exceso se descarta."
+  type        = number
+  default     = 30000
+}

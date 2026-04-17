@@ -18,6 +18,8 @@ from collections import Counter
 
 import requests
 
+from tabla_reglas_inicio import mostrar_tabla_reglas
+
 API = "http://127.0.0.1:8080"
 PASSWORD = "demo1234"
 PLAYERS = [
@@ -133,6 +135,9 @@ def main():
     print(f"logged in: {', '.join(NAMES[k] for k in tokens)}")
     bootstrap_power(tokens)
     print("bootstrap: +10000 steps each (~100 power_points)\n")
+
+    # Nueva partida → setup + tabla de reglas (2 tropas/barrio + 30 pool + pasos del día)
+    mostrar_tabla_reglas(API, tokens)
 
     for move in range(1, MAX_MOVES + 1):
         turn = get("/api/v1/turn/")

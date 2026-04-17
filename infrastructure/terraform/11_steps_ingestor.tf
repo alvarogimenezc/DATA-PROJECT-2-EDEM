@@ -1,5 +1,5 @@
 # ┌─────────────────────────────────────────────────────────────────────────┐
-# │ 11_steps_ingestor.tf — Ingesta diaria + scoring horario de pasos reales │
+# │ 11_steps_ingestor.tf — Ingesta diaria de pasos reales                   │
 # │                                                                         │
 # │ Este archivo despliega el componente `steps_ingestor/` del repo:        │
 # │                                                                         │
@@ -8,15 +8,13 @@
 # │        tracker, publica N mensajes al topic player-movements.           │
 # │      → Disparado por Cloud Scheduler a las 03:00 Europe/Madrid.         │
 # │                                                                         │
-# │   2) puntuador_horario  (Cloud Run **Service**)                         │
-# │      → endpoint POST /run que lee BQ (últimos 60 min), computa armies + │
-# │        gold y actualiza Firestore (user_balance + users + audit log).   │
-# │      → Disparado por Cloud Scheduler al minuto 0 de cada hora.          │
+# │   2) BigQuery table `player_movements_raw` — histórico crudo de eventos │
+# │      (lo escribía el pipeline anterior; queda para retrocompatibilidad  │
+# │      y queries analíticas sobre el stream sin transformar).             │
 # │                                                                         │
-# │   3) BigQuery table `player_movements_raw` — destino de la pipeline de  │
-# │      Noelia+Martha para los mensajes de player-movements.               │
-# │                                                                         │
-# │ Todo llega a estar ON sin intervención manual tras `terraform apply`.   │
+# │ El antiguo scorer horario se eliminó: toda su lógica se absorbió en el  │
+# │ pipeline Dataflow unificado (pipelines/cloudrisk_unified.py) vía        │
+# │ stateful DoFn. Ya no hay Cloud Run Service ni Cloud Scheduler horario.  │
 # └─────────────────────────────────────────────────────────────────────────┘
 
 # ─── BigQuery: tabla de pasos crudos (lo que escribe la pipeline) ────────────
@@ -122,60 +120,6 @@ resource "google_cloud_run_v2_job" "steps_fetcher" {
   ]
 }
 
-# ─── Cloud Run SERVICE: scorer horario ──────────────────────────────────────
-resource "google_cloud_run_v2_service" "hourly_scorer" {
-  name     = "cloudrisk-hourly-scorer"
-  location = var.region
-  # Cloud Scheduler llega con OIDC → no-allow-unauthenticated
-  ingress = "INGRESS_TRAFFIC_ALL"
-
-  template {
-    service_account = google_service_account.steps_ingestor.email
-
-    scaling {
-      min_instance_count = 0   # escala a cero cuando no corre
-      max_instance_count = 1   # no queremos concurrencia en el scorer
-    }
-
-    containers {
-      image = "${var.region}-docker.pkg.dev/${var.project_id}/cloudrisk/steps-ingestor:latest"
-
-      env {
-        name  = "PROJECT_ID"
-        value = var.project_id
-      }
-      env {
-        name  = "BQ_DATASET"
-        value = google_bigquery_dataset.cloudrisk.dataset_id
-      }
-      env {
-        name  = "STEPS_TABLE"
-        value = google_bigquery_table.player_movements_raw.table_id
-      }
-      env {
-        name  = "SCORING_WINDOW_MIN"
-        value = "60"
-      }
-    }
-  }
-
-  depends_on = [
-    google_project_service.apis,
-    google_project_iam_member.ingestor_bq_reader,
-    google_project_iam_member.ingestor_bq_jobuser,
-    google_project_iam_member.ingestor_firestore,
-  ]
-}
-
-# El scheduler necesita poder invocar el scorer
-resource "google_cloud_run_v2_service_iam_member" "scorer_scheduler_invoker" {
-  project  = google_cloud_run_v2_service.hourly_scorer.project
-  location = google_cloud_run_v2_service.hourly_scorer.location
-  name     = google_cloud_run_v2_service.hourly_scorer.name
-  role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.scheduler.email}"
-}
-
 # ─── Cloud Scheduler: fetcher diario a las 03:00 Europe/Madrid ──────────────
 resource "google_cloud_scheduler_job" "steps_fetcher_daily" {
   name        = "cloudrisk-steps-fetcher-daily"
@@ -205,43 +149,9 @@ resource "google_cloud_scheduler_job" "steps_fetcher_daily" {
   ]
 }
 
-# ─── Cloud Scheduler: scorer horario al minuto 0 ────────────────────────────
-resource "google_cloud_scheduler_job" "hourly_scorer_cron" {
-  name        = "cloudrisk-hourly-scorer-cron"
-  region      = var.region
-  description = "Lee BQ último hora, actualiza user_balance y users con armies+gold nuevos"
-  schedule    = "0 * * * *"
-  time_zone   = "Europe/Madrid"
-
-  attempt_deadline = "120s"
-
-  retry_config {
-    retry_count = 3
-  }
-
-  http_target {
-    http_method = "POST"
-    uri         = "${google_cloud_run_v2_service.hourly_scorer.uri}/run"
-
-    oidc_token {
-      service_account_email = google_service_account.scheduler.email
-      audience              = google_cloud_run_v2_service.hourly_scorer.uri
-    }
-  }
-
-  depends_on = [
-    google_cloud_run_v2_service_iam_member.scorer_scheduler_invoker,
-  ]
-}
-
 output "steps_fetcher_job_name" {
   value       = google_cloud_run_v2_job.steps_fetcher.name
   description = "Run-once-daily Cloud Run Job that ingests random_tracker data"
-}
-
-output "hourly_scorer_url" {
-  value       = google_cloud_run_v2_service.hourly_scorer.uri
-  description = "Scorer endpoint (POST /run). Invoked by Cloud Scheduler every hour."
 }
 
 output "player_movements_raw_table" {

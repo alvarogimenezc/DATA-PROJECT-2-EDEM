@@ -16,6 +16,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # ─── Game constants (not env-configurable — part of the game rules) ──────
 MAX_ZONE_DEFENSE: int = 40         # cap on a zone's armies/defense_level
 POWER_PER_STEPS_DEFAULT: int = 100 # steps needed to gain 1 power point
+# Invariante del juego: toda zona propia mantiene >= MIN_GARRISON ejércitos.
+# Aplicada en setup (ya), fortify, conquista (Risk dice y legacy power).
+MIN_GARRISON: int = 2
 
 
 class Settings(BaseSettings):
@@ -38,8 +41,10 @@ class Settings(BaseSettings):
     FIRESTORE_COLLECTION_BATTLES: str = "battles"
     FIRESTORE_COLLECTION_STEP_LOGS: str = "step_logs"
 
-    # BigQuery
-    BIGQUERY_DATASET: str = "cloudrisk_metrics"
+    # BigQuery — el dataset "cloudrisk" lo crea Terraform y lo pueblan el
+    # pipeline Dataflow unificado y el router /analytics. El legado
+    # cloudrisk_metrics se eliminó al retirar el dashboard Streamlit.
+    BIGQUERY_DATASET: str = "cloudrisk"
     BIGQUERY_TABLE_USERS: str = "user_metrics"
     BIGQUERY_TABLE_BATTLES: str = "battle_metrics"
     BIGQUERY_TABLE_ZONES: str = "zone_metrics"
@@ -58,6 +63,17 @@ class Settings(BaseSettings):
     # Ratio pasos/army — 500 pasos = 1 army. Diseñado para que un día
     # normal (10k pasos) te de ~20 armies, y un día "malo" (3k) te de 6.
     POWER_PER_STEPS: int = 500
+
+    # Parámetros del pipeline Dataflow unificado (Fase 1 arquitectura).
+    # El stateful DoFn los lee como env vars en runtime; se exponen aquí
+    # para que el backend también los conozca y los pueda mostrar en /me.
+    DAILY_ARMY_CAP: int = 50          # Máx ejércitos ganables por pasos/día
+    MAX_SPEED_KMH: float = 15.0       # Velocidad máxima aceptada (anti-trampa)
+    # Cap anti-trampa: no se aceptan más de DAILY_STEPS_CAP pasos/día por
+    # usuario. El exceso se descarta (no entra en armies ni en steps_total).
+    # 30000 ≈ maratón; cap humano razonable. Reemplaza al sistema rappel
+    # (v3.2 — el pipeline ya no depende de historial BQ para aplicar reglas).
+    DAILY_STEPS_CAP: int = 30000
     # Pool inicial en setup. v3.1 sube a 30 para que el jugador tenga
     # suficientes tropas que repartir entre zonas visibles y reclamar
     # alguna zona libre (15 zonas × 2 + 30 pool = 60 armies iniciales).

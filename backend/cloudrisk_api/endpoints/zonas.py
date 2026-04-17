@@ -11,10 +11,10 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from cloudrisk_api.configuracion import settings
+from cloudrisk_api.configuracion import settings, MIN_GARRISON
 from cloudrisk_api.database import zonas as zonas_repo, clanes as clanes_repo, usuarios as usuarios_repo, publicador_pubsub as pubsub_publisher
 from cloudrisk_api.services.autenticacion import get_current_user
-from cloudrisk_api.services import estado_juego as game_state, dados, adyacencia
+from cloudrisk_api.services import estado_juego as game_state, dados as dice, adyacencia as adjacency
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/zones", tags=["zones"])
@@ -144,6 +144,15 @@ def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(g
     # surrender instantly (no roll, no losses). We still apply the updates
     # atomically so a parallel attack on the same target can't double-grant.
     if target_armies == 0:
+        # Zona libre: el atacante transfiere al menos MIN_GARRISON tropas
+        # (invariante del juego). Como el precheck exige source > dice y
+        # MIN_GARRISON puede ser mayor que los dados usados, comprobamos aquí.
+        moved = max(req.attacker_dice, MIN_GARRISON)
+        if source_armies <= moved:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Need at least {moved + 1} armies in source to claim this zone (have {source_armies})",
+            )
         committed = zonas_repo.resolve_combat_atomic(
             source_id=req.from_zone_id,
             target_id=zone_id,
@@ -151,8 +160,8 @@ def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(g
             expected_source_armies=source_armies,
             expected_target_owner=target_owner,
             expected_target_armies=0,
-            new_source_armies=source_armies - req.attacker_dice,
-            new_target_armies=req.attacker_dice,
+            new_source_armies=source_armies - moved,
+            new_target_armies=moved,
             conquered=True,
             conquered_at=datetime.utcnow().isoformat(),
         )
@@ -162,8 +171,8 @@ def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(g
             "conquered": True,
             "attacker_rolls": [], "defender_rolls": [],
             "attacker_losses": 0, "defender_losses": 0,
-            "source_armies_after": source_armies - req.attacker_dice,
-            "target_armies_after": req.attacker_dice,
+            "source_armies_after": source_armies - moved,
+            "target_armies_after": moved,
             "turn_violation": not game_state.is_players_turn(current_user["id"]),
         }
 
@@ -175,7 +184,10 @@ def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(g
     conquered = new_target <= 0
 
     if conquered:
-        moved = max(req.attacker_dice, 1)   # must move in >= dice rolled
+        # Risk: hay que mover al menos tantas armies como dados se hayan
+        # tirado. Invariante adicional del juego: toda zona propia mantiene
+        # >= MIN_GARRISON, así que subimos el suelo del transfer.
+        moved = max(req.attacker_dice, MIN_GARRISON)
         new_source -= moved
         new_target = moved
 
