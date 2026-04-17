@@ -1,15 +1,22 @@
-# `steps_ingestor/` — Ingesta diaria de pasos reales + scoring horario
+# `steps_ingestor/` — Ingesta diaria de pasos reales
 
 **Dueño:** Álvaro (extensión del work de `weather_airq/`).
-**Contrato del equipo:** publica en el topic `player-movements` con `source="real"` — mismo topic que ya consume la pipeline de Noelia+Martha.
+**Contrato del equipo:** publica en el topic `player-movements` con `source="real"` — el mismo topic que consume el pipeline unificado de Dataflow.
+
+> **Cambio 2026-04:** antes había dos componentes aquí —
+> `recolector_pasos_diario.py` + `puntuador_horario.py` (Cloud Run horario
+> que leía BQ y escribía Firestore). **El scoring se ha movido al pipeline
+> unificado `pipelines/cloudrisk_unified.py`**, que lo hace en streaming
+> con estado por jugador. Este módulo se queda sólo con la *ingesta* de
+> pasos; el Cloud Run scorer y su Scheduler ya no existen.
 
 ---
 
-## Qué hace
+## Qué hace ahora
 
-Dos componentes, cada uno con responsabilidad única:
+Una sola responsabilidad: pull diario del tracker de GitHub → Pub/Sub.
 
-### 1. `recolector_pasos_diario.py` — Cloud Run Job, corre **1 vez al día**
+### `recolector_pasos_diario.py` — Cloud Run Job, corre **1 vez al día**
 
 1. Descarga el JSON más reciente de
    [`github.com/FranciscoAlvarezVaras/random_tracker`](https://github.com/FranciscoAlvarezVaras/random_tracker)
@@ -32,20 +39,9 @@ Dos componentes, cada uno con responsabilidad única:
 
 4. Escribe un marker `step_ingests/{date}` para idempotencia diaria.
 
-### 2. `puntuador_horario.py` — Cloud Run Service, trigger Cloud Scheduler cada hora
-
-1. Consulta BigQuery `cloudrisk.player_movements_raw` (últimos 60 min).
-2. Suma pasos por `player_id` y aplica el multiplicador ambiental de BQ
-   (`environmental_factors` de la pipeline de Noelia+Martha).
-3. Calcula puntos nuevos: `puntos = pasos * multiplicador_aire * multiplicador_tiempo`.
-4. Actualiza `user_balance/{player_id}`:
-   - `total_steps += pasos_última_hora`
-   - `armies += puntos / 10`  (1 army por cada 10 puntos)
-   - `gold += puntos / 100`   (1 gold por cada 100 puntos)
-   - `updated_at = now()`
-
-Resultado: los jugadores despiertan cada mañana con sus pasos del día
-anterior ya convertidos en armies y gold listos para usar.
+A partir de aquí el pipeline de Dataflow (`cloudrisk_unified.py`) recoge el
+mensaje, aplica anti-trampa + multiplicador ambiental, y escribe a
+Firestore (`user_balance/`, `users/`) y BigQuery (`player_scoring_events`).
 
 ---
 
@@ -59,7 +55,7 @@ anterior ya convertidos en armies y gold listos para usar.
                      │  HTTPS GET, 1×/día a las 03:00 UTC
                      ▼
     ┌───────────────────────────────┐
-    │  recolector_pasos_diario          │   Cloud Run Job (scheduled)
+    │  recolector_pasos_diario.py   │   Cloud Run Job (scheduled)
     │  (steps_ingestor/)            │
     └──────────┬────────────────────┘
                │  publish N mensajes
@@ -67,33 +63,22 @@ anterior ya convertidos en armies y gold listos para usar.
         ┌──────────────────┐
         │  Pub/Sub topic   │
         │  player-movements│
-        └─────┬────────────┘
-              │
-     ┌────────┴─────────┐
-     ▼                  ▼
-  Dataflow pipeline    puntuador_horario (Cloud Run)
-  (Noelia+Martha)      trigger: Cloud Scheduler cada hora
-     │                  │
-     ▼                  ▼
-  BigQuery             Firestore user_balance/
-  (cloudrisk.          (armies, gold actualizados)
-   player_movements_   
-   raw, particionada   
-   por día)            
+        └────────┬─────────┘
+                 │
+                 ▼
+      ┌────────────────────────────────┐
+      │  pipelines/cloudrisk_unified   │   Dataflow streaming (stateful)
+      │  — anti-trampa + scoring       │
+      └──────┬───────────────────┬─────┘
+             ▼                   ▼
+       Firestore             BigQuery
+       user_balance/         player_scoring_events
+       (armies, gold)        (histórico + DLQ)
 ```
 
----
-
-## Por qué dos componentes y no uno
-
-| Componente | Frecuencia | Por qué separado |
-|---|---|---|
-| `recolector_pasos_diario` | 1×/día (batch) | Sólo necesitamos ver el repo 1 vez; el dato ya es diario |
-| `puntuador_horario` | 1×/hora (batch) | Queremos scoring responsivo aunque sólo haya 1 pull/día |
-
-El scorer trabaja sobre BQ, no sobre el pull directo: así ingesta y scoring
-se desacoplan. Mañana podemos meter un Fitbit webhook que publique en el
-MISMO topic, y el scorer sigue funcionando igual sin cambios.
+El scorer horario que existía antes (`puntuador_horario.py`) ha desaparecido:
+su lógica vive en el `StatefulScoringDoFn` del pipeline unificado y corre
+**en streaming** (por-evento) en vez de batch horario.
 
 ---
 
@@ -125,25 +110,11 @@ gcloud scheduler jobs create http cloudrisk-steps-fetcher-daily \
   --uri=https://europe-west1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/$PROJECT_ID/jobs/cloudrisk-steps-fetcher:run \
   --http-method=POST \
   --oauth-service-account-email=cloudrisk-scheduler@$PROJECT_ID.iam.gserviceaccount.com
-
-# Cloud Run Service (hourly scorer)
-gcloud run deploy cloudrisk-hourly-scorer \
-  --source=. \
-  --region=europe-west1 \
-  --no-allow-unauthenticated \
-  --service-account=cloudrisk-scheduler@$PROJECT_ID.iam.gserviceaccount.com \
-  --set-env-vars=PROJECT_ID=$PROJECT_ID
-
-# Cloud Scheduler cada hora en punto
-gcloud scheduler jobs create http cloudrisk-hourly-scorer \
-  --location=europe-west1 \
-  --schedule='0 * * * *' \
-  --uri=https://cloudrisk-hourly-scorer-xxxx.run.app/run \
-  --http-method=POST \
-  --oidc-service-account-email=cloudrisk-scheduler@$PROJECT_ID.iam.gserviceaccount.com
 ```
 
 Terraform lo cablea solo en `infrastructure/terraform/09_scheduler.tf`.
+El recurso del Cloud Run *hourly scorer* y su Scheduler cron fueron
+**eliminados** en el refactor de abril 2026.
 
 ---
 
@@ -166,5 +137,7 @@ python recolector_pasos_diario.py --project cloudrisk-local --date 2026-04-16
 
 `pytest tests/` ejecuta:
 - `test_fetcher_parses_github_json` (con HTTP mocked)
-- `test_scorer_applies_multipliers` (contra BQ mocked)
 - `test_dedup_same_day_twice`
+
+El test `test_scorer_applies_multipliers` ya no aplica aquí — la misma
+funcionalidad se cubre ahora en `tests/pipelines/test_cloudrisk_unified.py`.
