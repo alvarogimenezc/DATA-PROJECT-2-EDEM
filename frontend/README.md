@@ -2,7 +2,7 @@
 
 ## 🎯 Qué hace este directorio
 
-Es la **aplicación web del juego**: el mapa de Valencia interactivo, el login de los comandantes, el panel de clan, la conquista de zonas y la vista de batallas en curso. Lo que ve el jugador.
+Es la **aplicación web del juego**: el mapa de Valencia interactivo, el login de los comandantes, el panel de clan, la conquista de zonas, la vista de batallas en curso **y la página `/analytics` con gráficos históricos** (absorbió el antiguo dashboard Streamlit). Lo que ve el jugador.
 
 Construida como SPA con **React + Vite**, renderiza el mapa con **MapLibre GL** (fork open-source de Mapbox, sin token de pago), y habla con el `backend/` por REST + WebSocket para los eventos en vivo.
 
@@ -30,13 +30,17 @@ Se despliega como **Cloud Run Service** (`cloudrisk-web`) detrás de un `nginx` 
 | `Dockerfile` | Multi-stage: `node:20-alpine` para `npm run build`, luego `nginx:1.27-alpine` sirviendo `/dist`. |
 | `nginx.conf` | Config nginx: servir SPA con fallback a `index.html` para React Router. |
 | `tailwind.config.js` | Purga y tema de Tailwind. |
-| `src/` | Código fuente: `App.jsx`, `pages/`, `components/`, `hooks/`, `contexts/`, `api/`. |
+| `src/pages/UrbanPacer.jsx` | Página principal: mapa + HUD + `ActionPanel` (incluye *polling* a `/api/v1/turn/` cada 3 s con banner "No es tu turno" y copy "Camina para ganar tropas" cuando `armies=0`). |
+| `src/pages/Analytics.jsx` 🆕 | Tabs de gráficos que consume `/api/v1/analytics/*` (top-steps-month, top-rainy-days, top-bad-air, user history). Sustituye al antiguo dashboard Streamlit. |
+| `src/api/client.js` | Axios con interceptor JWT + base URL desde `VITE_API_URL`. |
+| `src/api/analiticas.js` 🆕 | Fetchers tipados para `/analytics/*`. |
+| `src/components/` | HUD, sidebar, diálogos de ataque, etc. |
 | `public/` | Assets estáticos (favicons, imágenes de reel de recompensas). |
 
 ## 🔗 Cómo se conecta con el resto del proyecto
 
 ```
-frontend/  ──(HTTP REST)──▶  backend/  (/auth, /zones, /clans, /armies, /battles)
+frontend/  ──(HTTP REST)──▶  backend/  (/auth, /zones, /clans, /armies, /battles, /turn, /analytics)
            ──(WebSocket)──▶  backend/  (eventos live: conquest, battle-start)
 
 Build time: Cloud Build inyecta VITE_API_URL y VITE_WS_URL tras deploy del backend
@@ -46,7 +50,8 @@ Runtime:    nginx sirve el bundle en :8080  ──▶  Cloud Run Service cloudri
 ```
 
 - **Depende 100 %** del `backend/`: sin API el login no funciona.
-- El **dashboard** es un servicio aparte (Streamlit), no se embebe en el frontend.
+- La **analítica histórica** (lo que antes pintaba el dashboard Streamlit) está
+  embebida en `/analytics` → consume `/api/v1/analytics/*` del mismo backend.
 - Terraform (`08_cloud_run.tf`) crea el service `cloudrisk-web` y expone la URL pública.
 
 ## 🚀 Cómo ejecutarlo

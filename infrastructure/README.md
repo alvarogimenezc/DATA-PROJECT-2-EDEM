@@ -6,7 +6,7 @@ Aquí vive toda la **infraestructura como código** de CloudRISK sobre GCP. Un s
 
 Dos cosas conviven aquí:
 
-- **`terraform/`**: 14 ficheros `.tf` numerados por orden de dependencia. Es el estándar del proyecto.
+- **`terraform/`**: 15 ficheros `.tf` numerados por orden de dependencia. Es el estándar del proyecto.
 - **`deploy.sh`**: bootstrap "de los primeros 5 minutos" — habilita APIs, crea el bucket de estado remoto y arranca `terraform init`. Solo lo corres una vez por proyecto nuevo.
 
 **Este README es un resumen.** Toda la explicación detallada de qué hace cada recurso, cómo se conectan y troubleshooting vive en `notebooks/TERRAFORM_Y_GCP_REFERENCIA.md` — no dupliques cosas aquí.
@@ -28,14 +28,15 @@ Dos cosas conviven aquí:
 | `terraform/01_apis.tf` | Habilita APIs necesarias (run, firestore, pubsub, bigquery, artifactregistry, secretmanager...). |
 | `terraform/02_pubsub.tf` | Topics y subscriptions: `player-movements`, `weather-events`, `airquality-events` + DLQs. |
 | `terraform/03_firestore.tf` | Base de datos Firestore en modo Native, región `eur3`. |
-| `terraform/04_bigquery.tf` | Datasets `cloudrisk_metrics` y `cloudrisk`, tablas de step_events y environmental_factors. |
+| `terraform/04_bigquery.tf` | Dataset `cloudrisk` con tablas `player_scoring_events`, `environmental_factors`, `dead_letter` (+ `user_actions` si aplica). |
 | `terraform/05_artifact_registry.tf` | Repo Docker `cloudrisk-images` donde Cloud Build sube las imágenes. |
-| `terraform/06_secrets.tf` | Secret Manager: `JWT_SECRET`, credenciales del tracker externo. |
-| `terraform/07_iam.tf` | Service accounts y bindings (backend, walker, scorer, scheduler). |
-| `terraform/08_cloud_run.tf` | Services `cloudrisk-api`, `cloudrisk-dashboard`, `cloudrisk-web` + Job `cloudrisk-walker`. |
-| `terraform/09_scheduler.tf` | Cloud Scheduler: cron diario del fetcher, cron horario del scorer. |
+| `terraform/06_secrets.tf` | Secret Manager: `JWT_SECRET`, `SCHEDULER_SECRET`, credenciales del tracker externo. |
+| `terraform/07_iam.tf` | Service accounts y bindings (backend, walker, dataflow-worker, scheduler). |
+| `terraform/08_cloud_run.tf` | Services `cloudrisk-api` y `cloudrisk-web` + Job `cloudrisk-walker`. |
+| `terraform/09_scheduler.tf` | Cloud Scheduler: cron diario del fetcher de pasos + cron de `/turn/advance` y `/battles/resolve-expired`. |
 | `terraform/10_demo_seed.tf` | Job efímero que corre `sembrar_demo.py` tras el apply. |
-| `terraform/11_steps_ingestor.tf` | Cloud Run Job (daily fetcher) + Service (hourly scorer) del `steps_ingestor/`. |
+| `terraform/11_steps_ingestor.tf` | Cloud Run Job (daily fetcher) del `steps_ingestor/`. |
+| `terraform/12_dataflow.tf` | Flex Template + `google_dataflow_flex_template_job` que despliega `pipelines/cloudrisk_unified.py`. |
 | `terraform/providers.tf` | Config del backend GCS + provider `google`. |
 | `terraform/variables.tf` / `terraform.tfvars` | Inputs: `project_id`, `region`, etc. (el `.example` es la plantilla). |
 | `terraform/outputs.tf` | URLs de Cloud Run + nombres de topics que otros scripts consumen. |
@@ -48,15 +49,33 @@ infrastructure/deploy.sh  ──▶  terraform init/apply
                                       ▼
                     Todos los recursos GCP que necesitan:
                                       │
-     ┌────────────────┬────────────────┼────────────────┬─────────────────┐
-     ▼                ▼                ▼                ▼                 ▼
-backend/         frontend/        dashboard/      data_generator/    steps_ingestor/
-(Cloud Run)    (Cloud Run)      (Cloud Run)       (Cloud Run Job)   (Job + Service)
+     ┌────────────────┬────────────────┬──────────────────┬─────────────────┐
+     ▼                ▼                ▼                  ▼                 ▼
+backend/         frontend/        pipelines/         data_generator/   steps_ingestor/
+(Cloud Run)    (Cloud Run)     (Dataflow Job)      (Cloud Run Job)    (Cloud Run Job)
                                       │
                                       ▼
                               CICD/cloudbuild.yaml
                          (el trigger lo crea 08_cloud_run.tf)
 ```
+
+> **Cambio 2026-04:** desaparecen de Terraform los recursos del antiguo
+> `cloudrisk-hourly-scorer` (Cloud Run Service + Scheduler horario) y del
+> dashboard Streamlit (`cloudrisk-dashboard`). Toda la lógica de scoring
+> vive ahora en el job de Dataflow definido en `12_dataflow.tf`; la
+> analítica se sirve desde el backend (`/api/v1/analytics/*`).
+
+### Variables relevantes (juego + pipeline)
+
+Definidas en `variables.tf` y consumidas por `12_dataflow.tf` (Flex Template):
+
+| Variable | Default | Uso |
+|---|---|---|
+| `power_per_steps` | `500` | Pasos necesarios para 1 army |
+| `daily_army_cap` | `50` | Máx armies/día por jugador |
+| `daily_steps_cap` | `30000` | Máx pasos contables/día (anti-trampa) |
+| `max_speed_kmh` | `15` | Umbral anti-trampa |
+| `scheduler_secret` | (random) | Token para endpoints internos (`/turn/setup`, `/battles/resolve-expired`) |
 
 - Sin `terraform apply` no hay **nada** desplegado — ni topics, ni BD, ni registro de imágenes.
 - Después del apply usas `bash CICD/sembrar_demo.sh` para poblar Firestore.

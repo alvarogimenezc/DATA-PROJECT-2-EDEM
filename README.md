@@ -47,18 +47,31 @@ construido como pipeline de datos **100 % serverless**:
 Walker (Cloud Run Job)          ─► Pub/Sub: player-movements ─┐
 Air ingestor (Cloud Run)        ─► Pub/Sub: air-quality      ─┤
 Weather ingestor (Cloud Run)    ─► Pub/Sub: weather          ─┤
+Steps fetcher (Cloud Run Job)   ─► Pub/Sub: player-movements ─┤
                                                                 ▼
-                              Dataflow (streaming, Apache Beam)
+                     Dataflow: pipelines/cloudrisk_unified.py
+                     (Apache Beam streaming, stateful DoFn)
                                          │
                     ┌────────────────────┴────────────────────┐
                     ▼                                         ▼
               BigQuery (analytics)                  Firestore (operativo)
-                    ▲                                         ▲
+              player_scoring_events                 user_balance/, users/
+              environmental_factors
+              dead_letter (DLQ)                              ▲
+                    ▲                                         │
                     └──────── Backend FastAPI (Cloud Run) ────┘
                                          ▲
                                          │
                               Frontend React + MapLibre 3D
+                              + /analytics/* (mismo front)
 ```
+
+> **Refactor 2026-04:** un único pipeline Dataflow *stateful* absorbe la lógica
+> que antes vivía en `src/dataflow_pipeline/pipeline.py`, `pipelines/ambiental_a_bq.py`
+> y `steps_ingestor/puntuador_horario.py`. El **dashboard Streamlit**
+> (`cloudrisk-dashboard`) se retira; la analítica se expone como endpoints
+> `/api/v1/analytics/*` en el backend y se pinta en la página `/analytics`
+> del front React.
 
 Ni un solo recurso "encendido" siempre. Todo escala a cero. Coste con 10 partidas/día: **< 3 €/mes**.
 
@@ -71,10 +84,10 @@ Ni un solo recurso "encendido" siempre. Todo escala a cero. Coste con 10 partida
 | Componente | Servicio GCP | Escala a cero | Coste idle |
 |---|---|:---:|:---:|
 | Walker (bot de pasos) | Cloud Run **Job** | sí | 0 € |
+| Steps fetcher (tracker GitHub) | Cloud Run **Job** | sí | 0 € |
 | Ingestores (air, weather) | Cloud Run Service (`min-instances=1`) | no | ~1 €/mes cada uno |
 | Backend FastAPI | Cloud Run Service | sí | 0 € |
-| Frontend React | Cloud Run Service | sí | 0 € |
-| Dashboard Streamlit | Cloud Run Service | sí | 0 € |
+| Frontend React (+ /analytics) | Cloud Run Service | sí | 0 € |
 | BD operativa | **Firestore Native** | — | 0 € hasta 1 GB |
 | Analytics | **BigQuery** | — | 0 € hasta 1 TB queries/mes |
 | Eventos | **Pub/Sub** | — | 0 € hasta 10 GB/mes |
@@ -101,8 +114,8 @@ Este proyecto **aplica uno a uno los 13 temas** que imparte Javi Briones en
 | # | Tema del curso | Servicio GCP | Dónde en CloudRISK |
 |---|---|---|---|
 | 1 | Pub/Sub | `pubsub.googleapis.com` | 3 topics: `player-movements`, `air-quality`, `weather` |
-| 2 | Apache Beam + Dataflow | `dataflow.googleapis.com` | `pipelines/ambiental_a_bq.py` |
-| 3 | Cloud Run | `run.googleapis.com` | 5 services + 1 job (walker) |
+| 2 | Apache Beam + Dataflow | `dataflow.googleapis.com` | `pipelines/cloudrisk_unified.py` (stateful DoFn por player_id) |
+| 3 | Cloud Run | `run.googleapis.com` | 4 services (api, web, air, weather) + 2 jobs (walker, steps-fetcher) |
 | 4 | Cloud Functions | `cloudfunctions.googleapis.com` | documentado (no usado — explicamos por qué) |
 | 5 | CI/CD (Cloud Build) | `cloudbuild.googleapis.com` | `CICD/cloudbuild.yaml` |
 | 6 | Firestore | `firestore.googleapis.com` | 4 colecciones (contrato + extendido) |
@@ -110,7 +123,7 @@ Este proyecto **aplica uno a uno los 13 temas** que imparte Javi Briones en
 | 8 | Secret Manager | `secretmanager.googleapis.com` | `cloudrisk-jwt-secret`, `openweather-api-key` |
 | 9 | Artifact Registry | `artifactregistry.googleapis.com` | repo `cloudrisk` con 5 imágenes |
 | 10 | Eventarc | `eventarc.googleapis.com` | documentado (no usado — explicamos por qué) |
-| 11 | Terraform (homework) | — | `infrastructure/terraform/` (9 archivos) |
+| 11 | Terraform (homework) | — | `infrastructure/terraform/` (15 archivos, incl. `12_dataflow.tf` Flex Template) |
 | 12 | Vision AI | `vision.googleapis.com` | ❌ no aplicable (sin imágenes de usuario) |
 | 13 | Logging / Monitoring | `logging.googleapis.com` | Cloud Run + Dataflow logs centralizados |
 
@@ -154,9 +167,8 @@ cp .env.example .env
 docker compose up --build
 ```
 
-- Frontend → http://localhost:3000
+- Frontend (incluye `/analytics`) → http://localhost:3000
 - API docs → http://localhost:8080/api/v1/docs
-- Dashboard → http://localhost:8501
 
 ### Opción B — Sin Docker (dev local, 3 terminales)
 
@@ -309,8 +321,8 @@ Apply complete! Resources: 47 added, 0 changed, 0 destroyed.
 
 Outputs:
 api_url           = "https://cloudrisk-api-abc123-ew.a.run.app"
-hourly_scorer_url = "https://cloudrisk-hourly-scorer-xyz-ew.a.run.app"
 web_url           = "https://cloudrisk-web-def456-ew.a.run.app"
+dataflow_job_id   = "2026-04-17_cloudrisk-unified_abc"
 ```
 
 **Qué acabas de crear:**
@@ -320,13 +332,14 @@ web_url           = "https://cloudrisk-web-def456-ew.a.run.app"
 | APIs GCP habilitadas | 12 | `01_apis.tf` |
 | Topics Pub/Sub (`player-movements`, `air-quality`, `weather`) | 3 | `02_pubsub.tf` |
 | Firestore Native DB + delete-protection + PITR | 1 | `03_firestore.tf` |
-| Dataset BQ `cloudrisk` + tablas | 2 | `04_bigquery.tf` + `11_steps_ingestor.tf` |
+| Dataset BQ `cloudrisk` + tablas (`player_scoring_events`, `environmental_factors`, `dead_letter`) | 1 dataset · 3 tablas | `04_bigquery.tf` |
 | Artifact Registry Docker repo `cloudrisk` | 1 | `05_artifact_registry.tf` |
-| Secrets (`cloudrisk-jwt-secret`, `openweather-api-key`) | 2 | `06_secrets.tf` |
+| Secrets (`cloudrisk-jwt-secret`, `scheduler-secret`, `openweather-api-key`) | 3 | `06_secrets.tf` |
 | Service Accounts con roles mínimos | 5 | `07_iam.tf` |
-| Cloud Run Services (api, web, dashboard, air, weather, scorer) | 6 | `08_cloud_run.tf` + `11_…` |
-| Cloud Run Jobs (walker, steps-fetcher) | 2 | `08_cloud_run.tf` + `11_…` |
-| Cloud Scheduler (decay, resolve, daily fetch, hourly score) | 4 | `09_scheduler.tf` + `11_…` |
+| Cloud Run Services (api, web, air, weather) | 4 | `08_cloud_run.tf` |
+| Cloud Run Jobs (walker, steps-fetcher) | 2 | `08_cloud_run.tf` + `11_steps_ingestor.tf` |
+| Cloud Scheduler (decay, resolve-expired, daily fetch) | 3 | `09_scheduler.tf` + `11_…` |
+| Dataflow Flex Template + streaming Job (`cloudrisk_unified`) | 1 | `12_dataflow.tf` |
 
 #### 💡 Por qué
 - **`terraform init`**: descarga el provider `hashicorp/google` (v5+) y conecta con el bucket GCS del §6.2. Ejecutado 1× por portátil.
@@ -374,11 +387,10 @@ gcloud builds submit --config=CICD/cloudbuild.yaml .
 #### 🎯 Haces esto (opción B: un servicio a la vez, Javi-style)
 ```bash
 # Patrón del profesor Javi Briones — cada servicio por separado
-bash CICD/desplegar_manual.sh backend           # FastAPI
+bash CICD/desplegar_manual.sh backend           # FastAPI (+ /analytics/*)
 bash CICD/desplegar_manual.sh walker            # Cloud Run Job (pasos sintéticos)
-bash CICD/desplegar_manual.sh frontend          # React + Vite
-bash CICD/desplegar_manual.sh dashboard         # Streamlit
-bash CICD/desplegar_manual.sh steps-ingestor    # fetcher + scorer
+bash CICD/desplegar_manual.sh frontend          # React + Vite (+ /analytics)
+bash CICD/desplegar_manual.sh steps-ingestor    # fetcher diario del tracker
 ```
 
 El script `desplegar_manual.sh` es un wrapper fino de **exactamente los 3
@@ -408,14 +420,18 @@ Service URL: https://cloudrisk-backend-xxxxx-ew.a.run.app
 - **Separación Terraform vs gcloud** = separación **infra vs imagen**. Terraform gestiona cosas que cambian poco (topics, tablas, IAM). `gcloud builds submit` gestiona lo que cambia con cada commit (la imagen Docker).
 - **`gcloud artifacts repositories create`**: registro privado de imágenes Docker en Europe-west1. Sólo se crea 1 vez — si ya existe, el script salta (`describe || create`).
 - **`gcloud builds submit --tag ...`**: sube tu carpeta (`backend/`) a GCS, lanza Cloud Build con el `Dockerfile` que hay dentro, y al terminar deja la imagen en Artifact Registry. Todo sin que tengas Docker instalado.
-- **`gcloud run deploy … --allow-unauthenticated`**: crea/actualiza el servicio con una URL pública. Para servicios internos (como `cloudrisk-hourly-scorer`) usamos `--no-allow-unauthenticated` y el Scheduler manda un OIDC token.
+- **`gcloud run deploy … --allow-unauthenticated`**: crea/actualiza el servicio con una URL pública. Para endpoints internos del backend (`/turn/setup`, `/battles/resolve-expired`) usamos el header `X-Scheduler-Token` (ver `06_secrets.tf` → `scheduler-secret`) y Scheduler lo inyecta automáticamente.
 - **Primera compilación**: ~8 min. Siguientes con cache: ~2 min.
 
 ---
 
-### 6.7 — Lanza el pipeline Dataflow
+### 6.7 — Lanza el pipeline Dataflow unificado
 
-Streaming continuo: Pub/Sub → transformaciones Apache Beam → BigQuery.
+Streaming continuo: los 3 topics Pub/Sub → `cloudrisk_unified.py` (Beam stateful) → Firestore + BigQuery.
+
+> Normalmente lo despliega Terraform (`12_dataflow.tf`, Flex Template). Este
+> comando manual sirve para pruebas o si necesitas lanzar una versión parcheada
+> fuera del ciclo de Terraform.
 
 #### 🎯 Haces esto
 ```bash
@@ -423,21 +439,24 @@ Streaming continuo: Pub/Sub → transformaciones Apache Beam → BigQuery.
 gsutil mb -l europe-west1 gs://cloudrisk-492619-dataflow
 
 # Lanza el job streaming — requiere Python 3.12 (NO 3.13)
-python pipelines/ambiental_a_bq.py \
+python pipelines/cloudrisk_unified.py \
   --runner=DataflowRunner \
   --project=cloudrisk-492619 \
   --region=europe-west1 \
   --temp_location=gs://cloudrisk-492619-dataflow/tmp \
   --staging_location=gs://cloudrisk-492619-dataflow/staging \
-  --air_subscription=projects/cloudrisk-492619/subscriptions/air-quality-sub \
-  --weather_subscription=projects/cloudrisk-492619/subscriptions/weather-sub \
-  --output_table=cloudrisk-492619:cloudrisk.environmental_factors \
+  --player_sub=projects/cloudrisk-492619/subscriptions/player-movements-sub \
+  --weather_sub=projects/cloudrisk-492619/subscriptions/weather-sub \
+  --airq_sub=projects/cloudrisk-492619/subscriptions/air-quality-sub \
+  --scoring_table=cloudrisk-492619:cloudrisk.player_scoring_events \
+  --env_table=cloudrisk-492619:cloudrisk.environmental_factors \
+  --dlq_table=cloudrisk-492619:cloudrisk.dead_letter \
   --streaming
 ```
 
 #### 👀 Ves esto
 ```
-INFO: Starting the Dataflow job 'cloudrisk-env-to-bq-…'
+INFO: Starting the Dataflow job 'cloudrisk-unified-…'
 INFO: Created job with id: 2026-04-17_…
 ```
 
@@ -447,7 +466,8 @@ y verás el DAG ejecutándose en tiempo real.
 #### 💡 Por qué
 - **`--runner=DataflowRunner`** → lo ejecuta GCP, no tu portátil. Autoescala workers según carga (0 si no hay mensajes).
 - **`--streaming`** → el job no termina; se queda escuchando Pub/Sub indefinidamente.
-- **Subscriptions `-sub`** → Terraform las creó en §6.4. Los nombres `air-quality-sub` / `weather-sub` son el **contrato del equipo** (ver §9 Firestore contrato).
+- **Subscriptions `-sub`** → Terraform las creó en §6.4. Los nombres `player-movements-sub`, `weather-sub`, `air-quality-sub` son el **contrato del equipo**.
+- **Stateful DoFn por `player_id`** → aplica anti-trampa (speed > 15 km/h → DLQ) + caps diarios (armies y pasos). Ver `pipelines/README.md`.
 
 ---
 
@@ -546,12 +566,16 @@ de datos **continua** (no un job one-shot) que:
 
 1. **Capte** pasos reales desde una fuente externa (`random_tracker`, repo GitHub).
 2. **Los transporte** como eventos individuales (Pub/Sub).
-3. **Los persista** para analítica (BigQuery, particionado por día).
-4. **Los convierta en estado de juego** cada hora (Firestore: `user_balance`, `users`).
+3. **Los convierta en estado de juego en streaming** (Dataflow *stateful* por `player_id`):
+   anti-trampa (> 15 km/h → DLQ), caps diarios de pasos/armies, multiplicador ambiental.
+4. **Los persista**: estado hot en Firestore (`user_balance`, `users`) + histórico
+   en BigQuery (`player_scoring_events`) para que `/analytics/*` pueda consultarlo.
 5. **Sea observable** por el jugador desde el frontend (endpoint de estado en vivo).
 
-Este ciclo **se repite 24 veces al día de forma automática** — Cloud Scheduler
-dispara el fetcher una vez (03:00 Europe/Madrid) y el scorer cada hora en punto.
+> **Nota de arquitectura:** antes había un Cloud Run Service
+> (`cloudrisk-hourly-scorer`) que leía BQ y escribía Firestore cada hora.
+> Se retiró — toda esa lógica vive ahora en el `StatefulScoringDoFn` del
+> pipeline Dataflow, por-evento y sin cron horario.
 
 ### 7.2 — Diagrama de la pipeline completa
 
@@ -565,7 +589,7 @@ dispara el fetcher una vez (03:00 Europe/Madrid) y el scorer cada hora en punto.
                   ┌───────────────────────────────────┐
                   │  Cloud Run JOB                    │
                   │  cloudrisk-steps-fetcher          │
-                  │  (recolector_pasos_diario.py)         │
+                  │  (recolector_pasos_diario.py)     │
                   │                                   │
                   │  - resuelve player_id (mapping)   │
                   │  - marca idempotencia SHA256      │
@@ -582,49 +606,38 @@ dispara el fetcher una vez (03:00 Europe/Madrid) y el scorer cada hora en punto.
            └──────────────────┬───────────────────────┘       backend /steps/sync
                               │
                               ▼
-           ┌──────────────────────────────────────────┐
-           │  Dataflow streaming (Apache Beam 2.55)   │
-           │  pipelines/ambiental_a_bq.py        │
-           │  (Noelia + Martha)                       │
-           └──────────────────┬───────────────────────┘
-                              │
-                              ▼
-         ┌──────────────────────────────────────────────┐
-         │  BigQuery                                    │
-         │  `cloudrisk.player_movements_raw`            │
-         │  - particionado por DAY(ts)                  │
-         │  - cluster (player_id, source)               │
-         │  - scan por hora ≈ 1 partición ≈ ~€0         │
-         └─────────────┬────────────────────────────────┘
-                       │  cada hora en punto
-                       ▼
-         ┌──────────────────────────────────────────────┐
-         │  Cloud Run SERVICE                           │
-         │  cloudrisk-hourly-scorer                     │
-         │  (puntuador_horario.py — FastAPI /run)           │
-         │                                              │
-         │  - SELECT steps últimos 60 min por jugador   │
-         │  - averagea environmental.multiplier         │
-         │  - points = steps × mult                     │
-         │  - armies = points // 10                     │
-         │  - gold   = points // 100                    │
-         └─────────────┬────────────────────────────────┘
-                       │
-        ┌──────────────┼──────────────┬────────────────────┐
-        ▼              ▼              ▼                    ▼
-  users/{id}   user_balance/{id}  hourly_score_log/   step_ingests/{date}
-  (steps_total, (armies, gold,   {timestamp, player_id, (sha256 marker,
-   power_points, last_scored_at)  points, armies, gold}  count, ts — idempot.)
-   gold)
-                                                          ▲
-                                                          │
-                              ┌───────────────────────────┴─┐
-                              │  Frontend React             │
-                              │  GET /steps/realtime-       │
-                              │      ingestion-status       │
-                              │  → muestra "🛰️ Ingesta en  │
-                              │    vivo" en el dashboard    │
-                              └─────────────────────────────┘
+           ┌────────────────────────────────────────────────┐
+           │  Dataflow streaming (Apache Beam)              │
+           │  pipelines/cloudrisk_unified.py                │
+           │  StatefulScoringDoFn por player_id:            │
+           │    · speed > 15 km/h → DLQ anti-trampa         │
+           │    · cap pasos diario (30 000)                 │
+           │    · armies = (pasos // 500) × mult ambiental  │
+           │    · cap armies diario (50)                    │
+           │    · timer 24 h → reset contadores             │
+           └───────┬────────────────┬─────────────┬─────────┘
+                   │                │             │
+                   ▼                ▼             ▼
+        ┌────────────────┐  ┌───────────────┐  ┌───────────────────┐
+        │  Firestore     │  │  BigQuery     │  │  BigQuery (DLQ)   │
+        │  user_balance/ │  │  player_      │  │  dead_letter      │
+        │  (armies, gold,│  │  scoring_     │  │  (rechazados +    │
+        │   last_scored) │  │  events       │  │   JSON malos)     │
+        │  users/{id}    │  │  (histórico   │  └───────────────────┘
+        │  (steps_total) │  │   por evento) │
+        └────────┬───────┘  └───────┬───────┘
+                 │                  │
+                 │                  ▼
+                 │       GET /api/v1/analytics/* (top-steps, top-rainy-days…)
+                 │
+                 ▼
+      ┌──────────────────────────────┐
+      │  Frontend React              │
+      │  - /game: mapa MapLibre + HUD│
+      │  - /analytics: gráficos BQ   │
+      │  - GET /steps/realtime-      │
+      │        ingestion-status      │
+      └──────────────────────────────┘
 ```
 
 ### 7.3 — Cadencia y responsabilidad
@@ -632,9 +645,9 @@ dispara el fetcher una vez (03:00 Europe/Madrid) y el scorer cada hora en punto.
 | Cuándo | Quién lo dispara | Qué hace | Dónde aterriza |
 |---|---|---|---|
 | `03:00 Europe/Madrid` (diario) | `cloudrisk-steps-fetcher-daily` (Cloud Scheduler) | `Cloud Run Job` lee `random_tracker/movements.json`, publica N mensajes al topic | Pub/Sub `player-movements` |
-| continuo (streaming) | Dataflow worker (autoscale 0→N) | Transforma + deduplica + enriquece | BigQuery `player_movements_raw` |
-| `minuto 0 de cada hora` | `cloudrisk-hourly-scorer-cron` (Cloud Scheduler) | `Cloud Run Service` llama a `POST /run` y corre el scoring | Firestore `user_balance`, `users`, `hourly_score_log` |
+| continuo (streaming, por-evento) | Dataflow worker (autoscale 0→N) con stateful DoFn | Anti-trampa + caps + scoring; escribe Firestore y BQ en el mismo pipeline | Firestore `user_balance`, `users` · BQ `player_scoring_events` · DLQ `dead_letter` |
 | on-demand | Frontend (cada 30 s cuando el jugador abre el HUD) | `GET /steps/realtime-ingestion-status` | Respuesta JSON con desglose por `source` |
+| on-demand | Frontend página `/analytics` | `GET /api/v1/analytics/{top-steps-month, top-rainy-days, top-bad-air, user/{id}/history}` | Gráficos recharts sobre histórico BQ |
 
 ### 7.4 — Por qué Pub/Sub como "bus único"
 
@@ -673,13 +686,15 @@ duplican pasos, nunca se duplican puntos.
 | Archivo | Rol | Quién lo mantiene |
 |---|---|---|
 | `steps_ingestor/recolector_pasos_diario.py` | Cloud Run Job: tira `random_tracker` y publica | Álvaro |
-| `steps_ingestor/puntuador_horario.py` | Cloud Run Service FastAPI: scoring horario | Álvaro |
-| `steps_ingestor/Dockerfile` | Imagen única para Job + Service | Álvaro |
-| `steps_ingestor/requirements.txt` | `fastapi`, `google-cloud-{pubsub,firestore,bigquery}` | Álvaro |
+| `steps_ingestor/Dockerfile` | Imagen del Cloud Run Job | Álvaro |
+| `steps_ingestor/requirements.txt` | `google-cloud-{pubsub,firestore}` | Álvaro |
+| `pipelines/cloudrisk_unified.py` | Job Dataflow unificado (stateful DoFn por jugador) | Noelia + Martha |
 | `data/random_tracker_mapping.json` | Mapea usuario GitHub → `player_id` | Álvaro |
 | `data/mock_tracker_feed.json` | Feed offline para dev/test sin red | Álvaro |
-| `infrastructure/terraform/11_steps_ingestor.tf` | BQ table + Job + Service + 2 Schedulers + IAM | Fran |
+| `infrastructure/terraform/11_steps_ingestor.tf` | Cloud Run Job + Scheduler diario + IAM | Fran |
+| `infrastructure/terraform/12_dataflow.tf` | Flex Template + job Dataflow del pipeline unificado | Fran |
 | `backend/cloudrisk_api/endpoints/pasos.py` | Endpoint `GET /steps/realtime-ingestion-status` | Fran |
+| `backend/cloudrisk_api/endpoints/analiticas.py` | Endpoints `/analytics/*` que consultan BQ | Fran |
 | `backend/cloudrisk_api/database/publicador_pubsub.py` | Publica con `source="backend_sync"` | Fran |
 | `notebooks/02_alvaro_ingestion.ipynb` §B | Guion paso-a-paso (celdas B.1–B.8) | Álvaro |
 
@@ -751,13 +766,14 @@ Login demo (todos con pass demo1234):
 | Recurso | Estado idle | Coste idle |
 |---|---|---|
 | `cloudrisk-steps-fetcher` (Cloud Run Job) | escalado a 0 | 0 € |
-| `cloudrisk-hourly-scorer` (Cloud Run Service) | `min-instances=0` | 0 € |
-| 2 Cloud Scheduler jobs | inactivos 364× al día | ~0,10 €/mes los dos |
-| `player_movements_raw` (BigQuery) | 200 KB/día | < 0,01 €/mes en storage |
-| Pub/Sub topic | sin retención prolongada | 0 € con volumen demo |
+| Dataflow `cloudrisk-unified` (streaming) | 1 worker mínimo (autoscale) | ~30-40 €/mes con tráfico demo (la pieza *no* escala a cero) |
+| Cloud Scheduler (fetcher diario) | inactivo 23 h/día | < 0,10 €/mes |
+| `player_scoring_events` + `dead_letter` (BigQuery) | ≈ 500 KB/día | < 0,01 €/mes en storage |
+| Pub/Sub topics | sin retención prolongada | 0 € con volumen demo |
 
-**Total esperado con partida demo 24/7: < 0,20 €/mes.** Sin un solo servidor
-encendido permanentemente.
+**Total esperado con partida demo 24/7: ~30-40 €/mes** — el coste lo carga
+Dataflow, que por diseño **no escala a cero** (necesita al menos 1 worker
+vivo para mantener el estado). El resto de servicios siguen a 0 € idle.
 
 ### 7.9 — Verificar la pipeline end-to-end (5 comandos)
 
@@ -770,15 +786,18 @@ gcloud run jobs execute cloudrisk-steps-fetcher --region europe-west1 --wait
 # 2) Confirma que llegaron mensajes al topic
 gcloud pubsub subscriptions pull player-movements-debug --auto-ack --limit 5
 
-# 3) Verifica que aterrizaron en BigQuery
+# 3) Verifica que aterrizaron en BigQuery (player_scoring_events)
 bq query --use_legacy_sql=false \
-  "SELECT source, COUNT(*) FROM \`cloudrisk-492619.cloudrisk.player_movements_raw\`
-   WHERE DATE(ts) = CURRENT_DATE() GROUP BY source"
+  "SELECT COUNT(*) AS events, COUNT(DISTINCT player_id) AS players
+   FROM \`cloudrisk-492619.cloudrisk.player_scoring_events\`
+   WHERE DATE(processed_at) = CURRENT_DATE()"
 
-# 4) Dispara el scorer ahora mismo (sin esperar al minuto 0 de la hora)
-SCORER_URL=$(terraform output -raw hourly_scorer_url)
-curl -X POST "$SCORER_URL/run" \
-     -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+# 4) Comprueba la DLQ — si hay eventos aquí, revisa los logs de Dataflow
+bq query --use_legacy_sql=false \
+  "SELECT rejection_reason, COUNT(*) AS n
+   FROM \`cloudrisk-492619.cloudrisk.dead_letter\`
+   WHERE DATE(processed_at) = CURRENT_DATE()
+   GROUP BY rejection_reason"
 
 # 5) Mira cómo subieron los armies del jugador en Firestore
 bash CICD/verificar_demo.sh cloudrisk-492619
@@ -792,12 +811,12 @@ bash CICD/verificar_demo.sh cloudrisk-492619
    │ {"player_id":"alvaro","steps_delta":320,"source":"real"...} │
    │ {"player_id":"fran",  "steps_delta":210,"source":"real"...} │
    └─────────────────────────────────────────────────────────────┘
-3) +--------+-------+
-   | source | f0_   |
-   +--------+-------+
-   | real   |   142 |
-   +--------+-------+
-4) {"status":"scored","players":4,"total_armies":47,"total_gold":4}
+3) +--------+---------+
+   | events | players |
+   +--------+---------+
+   |    142 |       4 |
+   +--------+---------+
+4) (vacío si no hay eventos rechazados — ideal)
 5) users            4 docs   [OK]
    user_balance     4 docs   [OK]
 ```
@@ -805,9 +824,9 @@ bash CICD/verificar_demo.sh cloudrisk-492619
 #### 💡 Por qué cada paso
 - **1)** `gcloud run jobs execute` lanza el Cloud Run Job manualmente. Sin `--wait` la CLI vuelve al prompt de inmediato y no sabes si la ejecución terminó.
 - **2)** `subscriptions pull --auto-ack` saca hasta 5 mensajes encolados sin volver a repartirlos → si los ves, la pipeline **publicó** bien. Si sale vacío, el fetcher no publicó (mira los logs del Job).
-- **3)** La consulta a BigQuery prueba que **Dataflow** consumió los mensajes y los escribió. Sólo escanea la partición de hoy (~1MB, ~€0).
-- **4)** El scorer está protegido con `--no-allow-unauthenticated`; por eso mandamos un **identity token** Bearer. Scheduler lo hace automáticamente cada hora.
-- **5)** `verificar_demo.sh` te confirma que `user_balance` pasó a tener armies+gold actualizados. Si sale `[OK]` pero los armies no suben, mira `hourly_score_log/` en Firestore.
+- **3)** La consulta a `player_scoring_events` prueba que **Dataflow** consumió los mensajes, pasó el anti-trampa y los escribió. Sólo escanea 1 partición (~€0).
+- **4)** La DLQ concentra eventos rechazados por velocidad > 15 km/h, JSON malos o cap diario excedido. Si `rejection_reason = anti_cheat_speed` → alguien está simulando pasos falsos.
+- **5)** `verificar_demo.sh` confirma que `user_balance` pasó a tener armies+gold actualizados — el pipeline Dataflow es el único que los escribe ahora.
 
 Si los 5 pasos devuelven datos → **la pipeline de tiempo real está operativa**.
 A partir de ese momento, cada hora **los jugadores reciben automáticamente los
@@ -823,23 +842,31 @@ puntos de los pasos reales que caminó el repo `random_tracker` ese día**.
 
 ## 8. Terraform: qué hace cada archivo
 
-Hemos dividido el terraform en 9 archivos temáticos (en vez de un solo `main.tf`
-de 350 líneas) para que sea más fácil de leer y modificar:
+Hemos dividido el terraform en 15 archivos temáticos (en vez de un solo `main.tf`
+monolítico) para que sea más fácil de leer y modificar:
 
 | Archivo | Qué crea | Por qué está separado |
 |---|---|---|
 | `providers.tf` | Provider Google + backend GCS | Configuración global |
-| `variables.tf` | Inputs (project_id, region, jwt_secret) | Lo primero que lees |
+| `variables.tf` | Inputs (project_id, region, secrets, params del juego) | Lo primero que lees |
 | `01_apis.tf` | Habilita 12 APIs de GCP | Nada funciona sin esto |
 | `02_pubsub.tf` | 3 topics + 3 subscriptions | Contrato con el equipo |
 | `03_firestore.tf` | Database con delete-protection + PITR | Datos operativos |
-| `04_bigquery.tf` | Dataset + tabla `environmental_factors` | Analytics |
+| `04_bigquery.tf` | Dataset `cloudrisk` + 3 tablas (`player_scoring_events`, `environmental_factors`, `dead_letter`) | Analytics + DLQ |
 | `05_artifact_registry.tf` | Repo Docker privado | Imágenes de servicios |
-| `06_secrets.tf` | JWT secret + OpenWeatherMap key | Nunca en código |
-| `07_iam.tf` | 4 Service Accounts + permisos mínimos | Seguridad |
-| `08_cloud_run.tf` | 5 services + 1 job | Compute |
-| `09_scheduler.tf` | 2 cron jobs | Automatización |
+| `06_secrets.tf` | `cloudrisk-jwt-secret`, `scheduler-secret`, `openweather-api-key` | Nunca en código |
+| `07_iam.tf` | 5 Service Accounts + permisos mínimos (incl. dataflow-worker) | Seguridad |
+| `08_cloud_run.tf` | 4 services (api, web, air, weather) + 1 job (walker) | Compute |
+| `09_scheduler.tf` | Cron de decay/resolve + fetch diario del tracker | Automatización |
+| `10_demo_seed.tf` | Job efímero que corre `sembrar_demo.py` | Demo lista tras apply |
+| `11_steps_ingestor.tf` | Cloud Run Job del fetcher + IAM + Scheduler diario | Ingesta tracker |
+| `12_dataflow.tf` | Flex Template build + `google_dataflow_flex_template_job` del pipeline unificado | Streaming |
 | `outputs.tf` | URLs + IDs al terminar | Integración scripts |
+
+> **Cambio 2026-04:** el archivo `11_steps_ingestor.tf` ya no crea el Cloud
+> Run Service del scorer horario ni su Scheduler — esa lógica vive ahora
+> en el job de Dataflow de `12_dataflow.tf`. El antiguo recurso
+> `cloudrisk-dashboard` (Streamlit) también desapareció.
 
 **Cada archivo está comentado en español** para un junior de data engineer —
 puedes abrirlo y entender qué hace cada resource sin mirar la doc oficial.
@@ -899,11 +926,21 @@ Todos en formato JSON UTF-8. Schema exacto en `pipelines/schemas/`.
 ### 8.4 Tablas BigQuery
 
 ```
-cloudrisk.environmental_factors     # air+weather fusionados (lo escribe Dataflow)
-cloudrisk.user_actions              # append-only de movimientos (opcional)
-cloudrisk.battle_metrics            # resultado de cada batalla (opcional)
-cloudrisk.daily_rollup              # agregado diario (vista)
+cloudrisk.player_scoring_events     # evento por evento (lo escribe cloudrisk_unified)
+cloudrisk.environmental_factors     # air+weather fusionados (lo escribe el mismo pipeline)
+cloudrisk.dead_letter               # eventos rechazados (anti-trampa, JSON mal formado)
+cloudrisk.user_actions              # append-only de acciones (place/attack/conquer/fortify — opcional)
 ```
+
+**Parámetros del juego** (env vars leídas por el pipeline y el backend):
+
+| Var | Default | Efecto |
+|---|---|---|
+| `POWER_PER_STEPS` | `500` | Pasos necesarios para 1 army |
+| `DAILY_ARMY_CAP` | `50` | Tope armies/día por jugador |
+| `DAILY_STEPS_CAP` | `30000` | Tope pasos contables/día (anti-trampa) |
+| `MAX_SPEED_KMH` | `15` | Umbral velocidad (> 15 → DLQ) |
+| `MIN_GARRISON` | `2` | Invariante: toda zona con owner mantiene ≥ 2 armies |
 
 ---
 
@@ -993,10 +1030,10 @@ gcloud builds triggers create github \
 El pipeline:
 
 1. Corre los tests backend (pytest)
-2. Compila las 5 imágenes Docker en paralelo
+2. Compila las imágenes Docker en paralelo (backend, frontend, air, weather, walker, steps-fetcher)
 3. Las sube a Artifact Registry
 4. Re-despliega los Cloud Run services
-5. Ejecuta un smoke test contra `/health`
+5. Ejecuta un smoke test contra `/health` y `/api/v1/analytics/top-steps-month`
 
 ---
 
@@ -1028,12 +1065,14 @@ como **6 PRs independientes**, una por owner. Proceso paso a paso en
 |---|---|---|
 | Backend 401 en `/users/me` | JWT vencido o `SECRET_KEY` cambió | Login de nuevo, invalida token local |
 | Frontend pantalla negra | Error JS runtime | F12 → Console → mirar línea roja |
-| `/turn/setup` devuelve < 60 zonas | In-memory store desactualizado | `curl -X POST /turn/setup` o reiniciar backend |
+| `/turn/setup` devuelve 403 | Falta header `X-Scheduler-Token` en prod | Inyectarlo (Scheduler ya lo hace automáticamente; en local se permite sin token si `USE_LOCAL_STORE=1`) |
+| `/turn/setup` devuelve < 60 zonas | In-memory store desactualizado | Reiniciar backend o lanzar el setup desde el propio frontend |
 | Walker no publica | SA sin permiso `pubsub.publisher` | Comprueba `07_iam.tf` aplicado |
 | Dataflow no procesa | Worker SA sin acceso a Firestore | IAM: `roles/datastore.user` |
+| Eventos en `cloudrisk.dead_letter` con `rejection_reason=anti_cheat_speed` | Simulador con paso muy rápido o bug en `speed_mps` | Revisar el productor — el pipeline funciona como debe |
 | Cloud Run 403 | Público no permitido | `allUsers` con `roles/run.invoker` (ver `08_cloud_run.tf`) |
 | Firestore queries lentas | Índice compuesto faltante | Consola Firestore → Indexes → Create |
-| BigQuery "quota exceeded" | Streaming insert > 100 req/s | Batch con Dataflow |
+| BigQuery "quota exceeded" | Streaming insert > 100 req/s | El pipeline hace INSERT streaming, agrupa por ventana si hace falta |
 | `terraform apply` bloqueado | Lock en state | `terraform force-unlock <LOCK_ID>` |
 
 ---

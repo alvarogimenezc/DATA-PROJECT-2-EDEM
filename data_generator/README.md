@@ -7,7 +7,7 @@ Es el **"walker"**: un generador de datos sintéticos que simula jugadores movi�
 Se usa para dos cosas:
 
 1. **Dev local**: llenar el sistema de eventos sin que nadie tenga que abrir la app y andar.
-2. **Demos E2E**: en clase, lanzar el walker + 3 bots de IA para que la partida avance sola mientras enseñamos el dashboard.
+2. **Demos E2E**: en clase, lanzar el walker + 3 bots de IA para que la partida avance sola mientras enseñamos la página `/analytics` del frontend.
 
 En producción corre como **Cloud Run Job** (no Service — no expone HTTP, solo se dispara y termina).
 
@@ -18,7 +18,7 @@ En producción corre como **Cloud Run Job** (no Service — no expone HTTP, solo
 | **Python 3.12** | Lenguaje común del equipo. Las librerías de geografía (`osmnx`, `shapely`, `networkx`) son de primera clase en Python. |
 | **osmnx + networkx** | Para que los jugadores "anden" por calles reales de OpenStreetMap en vez de teletransportarse entre puntos aleatorios. Da realismo a los pasos. |
 | **google-cloud-pubsub** | Publica los movements al mismo topic que usaría la app real del frontend. Así Dataflow no distingue entre sintético y humano. |
-| **apache-beam[gcp]** | Usado por el `recolector_metricas_local.py` para agregar métricas en modo local (escribe JSONL que lee el dashboard). |
+| **apache-beam[gcp]** | Usado por el `recolector_metricas_local.py` para agregar métricas en modo local (escribe JSONL inspeccionable en `/metrics/` cuando no hay BigQuery disponible). |
 | **requests** | Para los bots de IA que atacan el backend HTTP directamente en vez de publicar a Pub/Sub. |
 
 ## 📂 Archivos principales
@@ -30,6 +30,7 @@ En producción corre como **Cloud Run Job** (no Service — no expone HTTP, solo
 | `simulacion_rapida_juego.py` | Simulador acelerado para demos: una partida entera comprimida en ~60 s. |
 | `simulacion_multijugador.py` | Ejecuta varias simulaciones en paralelo (test de carga). |
 | `recolector_metricas_local.py` | Suscriptor Pub/Sub + pipeline Beam que escribe `.jsonl` en `/metrics` cuando no hay BigQuery. |
+| `tabla_reglas_inicio.py` | Siembra en Firestore la tabla de reglas iniciales del juego (zonas, multiplicadores base). Se corre 1 vez al bootstrap. |
 | `Dockerfile` | Imagen base del walker, usuario no-root, CMD por defecto `recolector_metricas_local.py`. |
 | `requirements.txt` | Pub/Sub, Firestore, Beam, osmnx, networkx, shapely, requests. |
 

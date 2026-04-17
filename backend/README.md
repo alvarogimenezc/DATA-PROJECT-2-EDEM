@@ -46,10 +46,15 @@ Cada archivo posee un recurso y exporta un `router = APIRouter(prefix="/<recurso
 |---|---|---|
 | **`usuarios.py`** | `POST /users/register`, `POST /users/login`, `GET /users/me` | Creación de cuenta, login con password, lectura de perfil protegida por JWT. |
 | **`clanes.py`** | `POST /clans/`, `GET /clans/`, `POST /clans/leave`, `POST /clans/{id}/join`, `POST /clans/{id}/delete` | Formar un clan, unirse a uno, salir de uno. Conquistar zonas requiere un clan. |
-| **`zonas.py`** | `GET /zones/`, `GET /zones/{id}`, `POST /zones/{id}/conquer` + helper WebSocket `handle_location_update()` | Los 87 barrios de Valencia. El helper WS se invoca desde `main.py` cada vez que el frontend envía un evento `location_update`. |
-| **`batallas.py`** | `POST /battles/`, `GET /battles/`, `GET /battles/{id}`, `GET /battles/{id}/advice`, `POST /battles/{id}/resolve` | Combate: declarar una batalla sobre una zona enemiga, obtener una pista táctica de la IA, resolverla. |
-| **`pasos.py`** | `POST /steps/sync`, `GET /steps/history` + helper WS `handle_step_update()` | Los pasos del mundo real de los jugadores convertidos en puntos de poder en el juego. |
-| **`ejercitos.py`** | `GET /armies/balance`, `POST /armies/place`, `GET /armies/locations`, `POST /armies/fortify` | Desplegar / mover tropas entre zonas propias. **Estas son las rutas en las que solapa el backend CloudRISK del equipo — mira [`services/adaptador_cloudrisk.py`](./cloudrisk_api/services/adaptador_cloudrisk.py).** |
+| **`zonas.py`** | `GET /zones/`, `GET /zones/adjacency`, `GET /zones/{id}`, `POST /zones/{id}/conquer`, `POST /zones/{id}/attack` + helper WebSocket `handle_location_update()` | Los 87 barrios de Valencia + grafo de adyacencia + combate Risk dice. El helper WS se invoca desde `main.py` cada vez que el frontend envía un evento `location_update`. |
+| **`batallas.py`** ⚠️ `deprecated=True` | `POST /battles/`, `GET /battles/`, `GET /battles/{id}`, `GET /battles/{id}/advice`, `POST /battles/{id}/resolve`, `POST /battles/resolve-expired` | Sistema de combate antiguo (power + d6). Se mantiene sólo para histórico y la resolución programada vía Cloud Scheduler. El sistema canónico es `/zones/{id}/attack` (dados Risk). |
+| **`pasos.py`** | `POST /steps/sync`, `GET /steps/history`, `GET /steps/realtime-ingestion-status` + helper WS `handle_step_update()` | Los pasos reales sincronizados con el topic `player-movements`. El *scoring* ya no se hace aquí — lo aplica el pipeline Dataflow `cloudrisk_unified`. |
+| **`ejercitos.py`** | `GET /armies/balance`, `POST /armies/place`, `GET /armies/locations`, `POST /armies/fortify` | Desplegar / mover tropas entre zonas propias. `fortify` respeta la invariante `MIN_GARRISON` (no deja la origen por debajo de 2). |
+| **`turno.py`** | `POST /turn/setup` (🔒 header `X-Scheduler-Token`), `GET /turn/`, `POST /turn/advance`, `POST /turn/end` | Máquina de turnos del juego. `setup` clusteriza zonas entre jugadores y es sensible — exige el token compartido salvo en modo local (`USE_LOCAL_STORE=1`). |
+| **`analiticas.py`** 🆕 | `GET /analytics/top-steps-month`, `GET /analytics/top-rainy-days`, `GET /analytics/top-bad-air`, `GET /analytics/user/{player_id}/history` | Lee `cloudrisk.player_scoring_events` × `environmental_factors` en BigQuery. Caché LRU 60 s para evitar un query por request. La página `/analytics` del frontend consume estos endpoints. |
+| **`compatibilidad_equipo.py`** | Endpoints de compatibilidad con el backend CloudRISK del equipo | Proxy opcional — ver `services/adaptador_cloudrisk.py`. |
+| **`multiplicadores.py`** | `GET /multipliers/current` | Último multiplicador ambiental efectivo (cachea el último `environmental_factors`). |
+| **`misiones.py`** | `GET /missions/`, `POST /missions/{id}/claim` | Misiones/achievements del juego. |
 
 ### `services/` — lógica de negocio transversal
 
@@ -107,7 +112,26 @@ Definidos en `configuracion.py`, todos sobrescribibles por env:
 
 | Variable env | Por defecto | Qué controla |
 |---|---|---|
-| `POWER_PER_STEPS` | 100 | Pasos que un jugador debe caminar para ganar 1 punto de poder. |
+| `POWER_PER_STEPS` | 500 | Pasos que un jugador debe caminar para ganar 1 army. Aplicado por el pipeline Dataflow, no por el backend. |
+| `DAILY_ARMY_CAP` | 50 | Tope diario de armies/jugador (aplica en el pipeline). |
+| `DAILY_STEPS_CAP` | 30000 | Tope diario de pasos contables/jugador (anti-trampa, aplica en el pipeline). |
+| `MAX_SPEED_KMH` | 15 | Umbral velocidad; eventos por encima van a la DLQ de BQ. |
+| `MIN_GARRISON` | 2 | Invariante: toda zona con owner mantiene ≥ 2 armies (aplicado en `zonas.py` tras conquista y en `ejercitos.py` en `fortify`). |
 | `BATTLE_DURATION_HOURS` | 2 | Cuánto tiempo permanece abierta una batalla antes de resolverse. |
 | `CLOUDRISK_MIN_MEMBERS` | 3 | Tamaño mínimo de clan necesario para reclamar una zona (actualmente informativo). |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | 10080 (7 días) | Tiempo de vida del JWT. |
+| `SCHEDULER_SECRET` | — | Token compartido con Cloud Scheduler para invocar endpoints internos (`/turn/setup`, `/battles/resolve-expired`). |
+| `USE_LOCAL_STORE` | `0` | Si `=1`, usa `almacen_en_memoria` y permite `/turn/setup` sin token (desarrollo). |
+
+## Novedades 2026-04 (refactor)
+
+- **`analiticas.py`** es nuevo — expone la analítica histórica que antes pintaba
+  el dashboard Streamlit (retirado).
+- **`/zones/{id}/attack`** es el sistema canónico de combate (Risk dice) y ha
+  corregido un `NameError` en los imports (`adyacencia as adjacency`, `dados as dice`).
+- **`/turn/setup`** ahora exige `X-Scheduler-Token` en producción. En local
+  (`USE_LOCAL_STORE=1`) sigue siendo abierto para no romper tests.
+- **`/battles/*`** está marcado `deprecated=True` — se mantiene para histórico
+  y para el cron `resolve-expired`.
+- Invariante **`MIN_GARRISON=2`**: tres sitios tocados para mantenerla
+  (`zonas.py` tras conquista, `ejercitos.py` en `fortify`, `turno.py` en setup).
