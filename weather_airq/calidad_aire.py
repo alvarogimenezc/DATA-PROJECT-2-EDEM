@@ -46,6 +46,8 @@ def _multiplier_from_aqi(aqi: int) -> float:
 
 
 def fetch_real() -> dict:
+    """Llama a la Air Pollution API y aplana la respuesta a `(ts, aqi, components)`.
+    Si la red falla, `raise_for_status()` lo propaga al bucle principal."""
     url = (
         "https://api.openweathermap.org/data/2.5/air_pollution"
         f"?lat={LAT}&lon={LON}&appid={API_KEY}"
@@ -54,30 +56,40 @@ def fetch_real() -> dict:
     r.raise_for_status()
     item = r.json()["list"][0]
     return {
-        "ts_unix": item["dt"],
-        "aqi": item["main"]["aqi"],
+        "ts_unix":    item["dt"],
+        "aqi":        item["main"]["aqi"],
         "components": item["components"],
     }
 
 
 def fetch_mock() -> dict:
-    """Generate a believable AQI sample (mostly 1-3, occasional 4-5)."""
+    """Genera muestras AQI sintéticas. Sesgo hacia 1-3 (la mayoría de días en
+    Valencia son aceptables); ocasionalmente 4-5 para que el frontend pueda
+    pintar también casos 'malo'."""
     weights = [0.4, 0.3, 0.2, 0.07, 0.03]   # AQI 1..5
     aqi = random.choices([1, 2, 3, 4, 5], weights=weights)[0]
     return {
         "ts_unix": int(time.time()),
         "aqi": aqi,
         "components": {
-            "co": round(random.uniform(200, 800), 2),
-            "no2": round(random.uniform(5, 60), 2),
-            "o3": round(random.uniform(40, 130), 2),
+            "co":    round(random.uniform(200, 800), 2),
+            "no2":   round(random.uniform(5, 60), 2),
+            "o3":    round(random.uniform(40, 130), 2),
             "pm2_5": round(random.uniform(3, 35), 2),
-            "pm10": round(random.uniform(5, 60), 2),
+            "pm10":  round(random.uniform(5, 60), 2),
         },
     }
 
 
 def emit(message: dict) -> None:
+    """Publica el mensaje según el sink disponible (mismo orden que `clima.py`):
+
+      1. `PUBSUB_PROJECT` → topic `air-quality` (modo prod / Dataflow).
+      2. `BACKEND_INGEST_URL` → POST HTTP al backend (modo single-host).
+      3. ninguno → vuelca a stdout (modo dev).
+
+    El primer match gana (early return).
+    """
     payload = json.dumps(message)
     if PUBSUB_PROJECT:
         from google.cloud import pubsub_v1   # lazy import
@@ -86,30 +98,38 @@ def emit(message: dict) -> None:
         future = publisher.publish(topic_path, payload.encode("utf-8"))
         future.result(timeout=10)
         log.info("pubsub %s: %s", PUBSUB_TOPIC, payload)
-    elif BACKEND_INGEST_URL:
+        return
+    if BACKEND_INGEST_URL:
         r = requests.post(BACKEND_INGEST_URL, json=message, timeout=5)
         log.info("POST %s → %d", BACKEND_INGEST_URL, r.status_code)
-    else:
-        print(payload, flush=True)
+        return
+    print(payload, flush=True)
+
+
+def _build_message(data: dict) -> dict:
+    """Convierte la respuesta cruda en el JSON a publicar. El nombre del
+    campo `indice_multiplicador_aire` es contrato con el pipeline Dataflow
+    — no renombrar."""
+    return {
+        "type": "air_quality",
+        "ts": datetime.fromtimestamp(data["ts_unix"], tz=timezone.utc).isoformat(),
+        "city": CITY,
+        "aqi": data["aqi"],
+        "indice_multiplicador_aire": _multiplier_from_aqi(data["aqi"]),
+        "components": data["components"],
+        "source": "mock" if MOCK else "openweathermap",
+    }
 
 
 def main() -> None:
+    """Bucle infinito de ingest cada `INTERVAL_S` segundos. Los errores
+    ocasionales se loguean y se reintenta en el siguiente tick."""
     log.info("Starting air_quality ingestor (mode=%s, interval=%ds)",
              "MOCK" if MOCK else "REAL", INTERVAL_S)
     while True:
         try:
             data = fetch_mock() if MOCK else fetch_real()
-            multiplier = _multiplier_from_aqi(data["aqi"])
-            message = {
-                "type": "air_quality",
-                "ts": datetime.fromtimestamp(data["ts_unix"], tz=timezone.utc).isoformat(),
-                "city": CITY,
-                "aqi": data["aqi"],
-                "indice_multiplicador_aire": multiplier,
-                "components": data["components"],
-                "source": "mock" if MOCK else "openweathermap",
-            }
-            emit(message)
+            emit(_build_message(data))
         except Exception as exc:   # noqa: BLE001
             log.warning("ingest cycle failed: %s", exc)
         time.sleep(INTERVAL_S)

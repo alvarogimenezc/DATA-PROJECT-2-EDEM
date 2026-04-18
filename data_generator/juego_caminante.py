@@ -294,14 +294,20 @@ def print_standings(move: int, zones: list[dict]):
         print(f"  {NAMES[pid]:6s} {n:3d}  {bar}")
 
 
-def main():
+def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--moves", type=int, default=300)
     p.add_argument("--pause", type=float, default=0.12, help="Seconds between moves.")
     p.add_argument("--seed", type=int, default=None)
-    args = p.parse_args()
+    return p.parse_args()
 
-    rng = random.Random(args.seed) if args.seed is not None else random.Random()
+
+def _bootstrap(args: argparse.Namespace, rng: random.Random):
+    """Carga centroides, loguea los 4 jugadores demo, lanza /turn/setup y
+    posiciona inicialmente los 4 walkers en puntos aleatorios de Valencia.
+
+    Devuelve `(tokens, centroids, walkers)` listos para `_game_loop`.
+    """
     centroids = load_zone_centroids()
     print(f"Loaded {len(centroids)} zone centroids from GeoJSON.")
 
@@ -312,13 +318,20 @@ def main():
     # Nueva partida → setup + tabla de reglas (2 tropas/barrio + 30 pool + pasos del día)
     mostrar_tabla_reglas(API, tokens)
 
-    # Seed 4 walkers at random points inside Valencia.
     walkers = {pid: (rng.uniform(LAT_MIN, LAT_MAX), rng.uniform(LNG_MIN, LNG_MAX))
                for pid, _, _ in PLAYERS}
     for pid, w in walkers.items():
         print(f"  {NAMES[pid]:6s} starts at ({w[0]:.4f}, {w[1]:.4f})")
     print()
 
+    return tokens, centroids, walkers
+
+
+def _game_loop(args: argparse.Namespace, rng: random.Random, tokens, centroids, walkers):
+    """Bucle de turnos: cada iteración consulta de quién es el turno, mueve
+    al walker correspondiente, ejecuta su acción, publica el paso y termina
+    su turno.
+    """
     for move in range(1, args.moves + 1):
         turn = requests.get(f"{API}/api/v1/turn/", timeout=5).json()
         pid = turn["current_player_id"]
@@ -346,6 +359,12 @@ def main():
 
         time.sleep(args.pause)
 
+
+def main():
+    args = _parse_args()
+    rng = random.Random(args.seed) if args.seed is not None else random.Random()
+    tokens, centroids, walkers = _bootstrap(args, rng)
+    _game_loop(args, rng, tokens, centroids, walkers)
     print_standings(args.moves, zones_snapshot())
 
 
