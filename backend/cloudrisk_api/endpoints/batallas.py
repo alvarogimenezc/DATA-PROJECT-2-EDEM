@@ -22,6 +22,16 @@ from cloudrisk_api.services.autenticacion import get_current_user
 router = APIRouter(prefix="/battles", tags=["battles"], deprecated=True)
 
 
+def _compute_battle_roll(power: int, defense_bonus: int = 0) -> int:
+    """Tirada determinista del sistema legacy de batallas.
+
+    Devuelve `random.d6 + (power // 10) + defense_bonus`. Se llama desde dos
+    sitios (resolución manual y `resolve-expired` del Scheduler), por eso
+    vive aquí en vez de duplicarse inline.
+    """
+    return random.randint(1, 6) + (power // 10) + defense_bonus
+
+
 class BattleCreate(BaseModel):
     zone_id: str
 
@@ -135,8 +145,8 @@ def resolve_battle(
 
     zone = zonas_repo.get_zone_by_id(battle["zone_id"])
     defense_bonus = zone.get("defense_level", 0) * 2 if zone else 0
-    attacker_roll = random.randint(1, 6) + (battle["attacker_power"] // 10)
-    defender_roll = random.randint(1, 6) + (battle["defender_power"] // 10) + defense_bonus
+    attacker_roll = _compute_battle_roll(battle["attacker_power"])
+    defender_roll = _compute_battle_roll(battle["defender_power"], defense_bonus)
 
     if attacker_roll > defender_roll:
         result = "attacker_wins"
@@ -190,8 +200,8 @@ def resolve_expired_battles(x_scheduler_token: Optional[str] = Header(None, alia
 
         zone = zonas_repo.get_zone_by_id(battle["zone_id"])
         defense_bonus = zone.get("defense_level", 0) * 2 if zone else 0
-        attacker_roll = random.randint(1, 6) + (battle["attacker_power"] // 10)
-        defender_roll = random.randint(1, 6) + (battle["defender_power"] // 10) + defense_bonus
+        attacker_roll = _compute_battle_roll(battle["attacker_power"])
+        defender_roll = _compute_battle_roll(battle["defender_power"], defense_bonus)
 
         if attacker_roll > defender_roll:
             result = "attacker_wins"

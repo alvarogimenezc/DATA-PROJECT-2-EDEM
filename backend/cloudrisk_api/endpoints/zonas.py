@@ -92,15 +92,12 @@ class AttackRequest(BaseModel):
     attacker_dice: int   # 1, 2, or 3
 
 
-@router.post("/{zone_id}/attack")
-def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(get_current_user)):
-    """Attack a contested zone with Risk dice rules.
+def _validate_attack_request(req: "AttackRequest", zone_id: str, current_user: dict):
+    """Valida pre-condiciones del ataque y devuelve `(source, target)`.
 
-    Turn check (soft): if it's not the caller's turn the response still
-    resolves combat so solo-play doesn't dead-lock, but the response
-    includes turn_violation=True so the UI can nag the user.
+    Lanza `HTTPException` con 400/404 si algo falla. Tras esta función las
+    zonas existen, las posee quien debe poseerlas y son adyacentes en el grafo.
     """
-    # Validate inputs
     if req.attacker_dice not in (1, 2, 3):
         raise HTTPException(status_code=400, detail="attacker_dice must be 1, 2, or 3")
 
@@ -116,66 +113,81 @@ def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(g
     if target_owner == current_user["id"]:
         raise HTTPException(status_code=400, detail="You can't attack your own zone")
 
-    # Risk rule: el objetivo debe ser adyacente (compartir frontera) a la
-    # zona de origen. Si el grafo no contiene la zona (caso extremo: zona
-    # sin geojson) lo dejamos pasar para no dead-lockar partidas, pero el
-    # caso normal es que ambos ids existan en el grafo precomputado.
+    # Regla Risk: la zona objetivo debe compartir frontera con la origen.
+    # Excepción: si la origen no aparece en el grafo (caso extremo: zona sin
+    # geojson), dejamos pasar el ataque para no bloquear partidas.
     adj_map = adjacency.get_adjacency()
-    if req.from_zone_id in adj_map:
-        if zone_id not in adj_map[req.from_zone_id]:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Target zone is not adjacent to source. "
-                    f"You can only attack neighboring territories."
-                ),
-            )
+    if req.from_zone_id in adj_map and zone_id not in adj_map[req.from_zone_id]:
+        raise HTTPException(
+            status_code=400,
+            detail="Target zone is not adjacent to source. You can only attack neighboring territories.",
+        )
+
+    return source, target
+
+
+def _conquer_free_zone(req: "AttackRequest", zone_id: str, source_armies: int,
+                       target_owner, current_user: dict):
+    """Caso especial: la zona objetivo no tiene defensores (`target_armies == 0`).
+
+    El atacante transfiere `max(dados, MIN_GARRISON)` tropas y se queda con la
+    zona sin tirada. Mantiene la invariante de garrison mínima del juego.
+    """
+    moved = max(req.attacker_dice, MIN_GARRISON)
+    if source_armies <= moved:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Need at least {moved + 1} armies in source to claim this zone (have {source_armies})",
+        )
+    committed = zonas_repo.resolve_combat_atomic(
+        source_id=req.from_zone_id,
+        target_id=zone_id,
+        attacker_clan=current_user["id"],
+        expected_source_armies=source_armies,
+        expected_target_owner=target_owner,
+        expected_target_armies=0,
+        new_source_armies=source_armies - moved,
+        new_target_armies=moved,
+        conquered=True,
+        conquered_at=datetime.utcnow().isoformat(),
+    )
+    if not committed:
+        raise HTTPException(status_code=409, detail="Zone state changed during combat; retry")
+    return {
+        "conquered": True,
+        "attacker_rolls": [], "defender_rolls": [],
+        "attacker_losses": 0, "defender_losses": 0,
+        "source_armies_after": source_armies - moved,
+        "target_armies_after": moved,
+        "turn_violation": not game_state.is_players_turn(current_user["id"]),
+    }
+
+
+@router.post("/{zone_id}/attack")
+def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(get_current_user)):
+    """Attack a contested zone with Risk dice rules.
+
+    Turn check (soft): if it's not the caller's turn the response still
+    resolves combat so solo-play doesn't dead-lock, but the response
+    includes turn_violation=True so the UI can nag the user.
+    """
+    source, target = _validate_attack_request(req, zone_id, current_user)
+    target_owner = target.get("owner_clan_id") or target.get("owner")
 
     source_armies = int(source.get("defense_level") or 0)
     target_armies = int(target.get("defense_level") or 0)
-    # Attacker must leave 1 army behind → needs strictly more than dice count.
+    # El atacante debe dejar al menos 1 ejército en la origen.
     if source_armies <= req.attacker_dice:
         raise HTTPException(
             status_code=400,
             detail=f"Need at least {req.attacker_dice + 1} armies in source (have {source_armies})",
         )
 
-    # Defender dice: 2 requires >=2 armies, else 1. Free zones with 0 defense
-    # surrender instantly (no roll, no losses). We still apply the updates
-    # atomically so a parallel attack on the same target can't double-grant.
+    # Camino corto: la zona objetivo está libre (sin defensores).
     if target_armies == 0:
-        # Zona libre: el atacante transfiere al menos MIN_GARRISON tropas
-        # (invariante del juego). Como el precheck exige source > dice y
-        # MIN_GARRISON puede ser mayor que los dados usados, comprobamos aquí.
-        moved = max(req.attacker_dice, MIN_GARRISON)
-        if source_armies <= moved:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Need at least {moved + 1} armies in source to claim this zone (have {source_armies})",
-            )
-        committed = zonas_repo.resolve_combat_atomic(
-            source_id=req.from_zone_id,
-            target_id=zone_id,
-            attacker_clan=current_user["id"],
-            expected_source_armies=source_armies,
-            expected_target_owner=target_owner,
-            expected_target_armies=0,
-            new_source_armies=source_armies - moved,
-            new_target_armies=moved,
-            conquered=True,
-            conquered_at=datetime.utcnow().isoformat(),
-        )
-        if not committed:
-            raise HTTPException(status_code=409, detail="Zone state changed during combat; retry")
-        return {
-            "conquered": True,
-            "attacker_rolls": [], "defender_rolls": [],
-            "attacker_losses": 0, "defender_losses": 0,
-            "source_armies_after": source_armies - moved,
-            "target_armies_after": moved,
-            "turn_violation": not game_state.is_players_turn(current_user["id"]),
-        }
+        return _conquer_free_zone(req, zone_id, source_armies, target_owner, current_user)
 
+    # Combate Risk normal — defensor tira 2 dados si tiene ≥ 2 ejércitos.
     defender_dice = 2 if target_armies >= 2 else 1
     combat = dice.resolve(req.attacker_dice, defender_dice)
 
@@ -184,16 +196,15 @@ def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(g
     conquered = new_target <= 0
 
     if conquered:
-        # Risk: hay que mover al menos tantas armies como dados se hayan
-        # tirado. Invariante adicional del juego: toda zona propia mantiene
-        # >= MIN_GARRISON, así que subimos el suelo del transfer.
+        # Si conquista, hay que mover al menos los dados tirados; además
+        # respetamos la invariante de MIN_GARRISON en la zona tomada.
         moved = max(req.attacker_dice, MIN_GARRISON)
         new_source -= moved
         new_target = moved
 
-    # Single atomic update of BOTH zones. Optimistic concurrency: if either
-    # zone's state changed between our earlier read and now, the transaction
-    # fails with 409 and the client can retry.
+    # Update atómico de AMBAS zonas con concurrencia optimista — si el estado
+    # de cualquiera cambió desde la lectura, devolvemos 409 para que el
+    # cliente reintente con la nueva foto.
     committed = zonas_repo.resolve_combat_atomic(
         source_id=req.from_zone_id,
         target_id=zone_id,
@@ -209,15 +220,14 @@ def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(g
     if not committed:
         raise HTTPException(status_code=409, detail="Zone state changed during combat; retry")
 
-    # Cache for frontend dice animation.
-    result = game_state.DiceResult(
+    # Cache para que el frontend pueda animar los dados.
+    game_state.record_dice(game_state.DiceResult(
         attacker_rolls=combat.attacker_rolls,
         defender_rolls=combat.defender_rolls,
         attacker_losses=combat.attacker_losses,
         defender_losses=combat.defender_losses,
         conquered=conquered,
-    )
-    game_state.record_dice(result)
+    ))
 
     return {
         "conquered": conquered,

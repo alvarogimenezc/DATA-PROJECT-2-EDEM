@@ -40,7 +40,7 @@ resource "null_resource" "seed_demo" {
   count = var.seed_demo_on_apply ? 1 : 0
 
   depends_on = [
-    google_firestore_database.default,
+    google_firestore_database.cloudrisk,
     google_pubsub_topic.air_quality,
     google_pubsub_topic.weather,
     google_pubsub_topic.player_movements,

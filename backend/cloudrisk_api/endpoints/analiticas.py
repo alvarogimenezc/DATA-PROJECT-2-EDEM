@@ -77,24 +77,31 @@ def _run(query: str) -> list[dict]:
     return out
 
 
+def _cached_bq_query(cache_key: str, sql: str) -> list[dict]:
+    """Combina cache TTL + ejecución BQ en una sola llamada.
+
+    Usado por todos los endpoints — evita el patrón repetido de definir un
+    closure `q()` que llama a `_run(sql)` y envuelve con `_cached(key, q)`.
+    """
+    return _cached(cache_key, lambda: _run(sql))
+
+
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 @router.get("/top-steps-month")
 def top_steps_month(limit: int = Query(10, ge=1, le=100)):
     """Top jugadores por pasos acumulados en los últimos 30 días."""
-    def q():
-        sql = f"""
-            SELECT player_id,
-                   SUM(steps_delta) AS steps_month,
-                   SUM(armies_earned) AS armies_month,
-                   SUM(distance_m) / 1000 AS km_month
-              FROM `{_project()}.{_dataset()}.player_scoring_events`
-             WHERE ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
-             GROUP BY player_id
-             ORDER BY steps_month DESC
-             LIMIT {int(limit)}
-        """
-        return _run(sql)
-    return _cached(f"top-steps-month:{limit}", q)
+    sql = f"""
+        SELECT player_id,
+               SUM(steps_delta) AS steps_month,
+               SUM(armies_earned) AS armies_month,
+               SUM(distance_m) / 1000 AS km_month
+          FROM `{_project()}.{_dataset()}.player_scoring_events`
+         WHERE ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+         GROUP BY player_id
+         ORDER BY steps_month DESC
+         LIMIT {int(limit)}
+    """
+    return _cached_bq_query(f"top-steps-month:{limit}", sql)
 
 
 @router.get("/top-rainy-days")
@@ -104,51 +111,47 @@ def top_rainy_days(limit: int = Query(10, ge=1, le=100)):
     Un "día lluvioso" se identifica como aquellos donde el multiplicador
     weather medio fue < 1.0 (baseline). Cruza con player_scoring_events.
     """
-    def q():
-        sql = f"""
-            WITH rainy_days AS (
-              SELECT DATE(ts) AS d
-                FROM `{_project()}.{_dataset()}.environmental_factors`
-               WHERE type = 'weather'
-               GROUP BY d
-              HAVING AVG(multiplier) < 1.0
-            )
-            SELECT p.player_id,
-                   SUM(p.steps_delta) AS steps_rainy,
-                   COUNT(DISTINCT DATE(p.ts)) AS rainy_days_active
-              FROM `{_project()}.{_dataset()}.player_scoring_events` p
-              JOIN rainy_days r ON DATE(p.ts) = r.d
-             GROUP BY p.player_id
-             ORDER BY steps_rainy DESC
-             LIMIT {int(limit)}
-        """
-        return _run(sql)
-    return _cached(f"top-rainy-days:{limit}", q)
+    sql = f"""
+        WITH rainy_days AS (
+          SELECT DATE(ts) AS d
+            FROM `{_project()}.{_dataset()}.environmental_factors`
+           WHERE type = 'weather'
+           GROUP BY d
+          HAVING AVG(multiplier) < 1.0
+        )
+        SELECT p.player_id,
+               SUM(p.steps_delta) AS steps_rainy,
+               COUNT(DISTINCT DATE(p.ts)) AS rainy_days_active
+          FROM `{_project()}.{_dataset()}.player_scoring_events` p
+          JOIN rainy_days r ON DATE(p.ts) = r.d
+         GROUP BY p.player_id
+         ORDER BY steps_rainy DESC
+         LIMIT {int(limit)}
+    """
+    return _cached_bq_query(f"top-rainy-days:{limit}", sql)
 
 
 @router.get("/top-bad-air")
 def top_bad_air(limit: int = Query(10, ge=1, le=100)):
     """Top jugadores activos en días de mala calidad del aire (multiplier < 0.9)."""
-    def q():
-        sql = f"""
-            WITH bad_air_days AS (
-              SELECT DATE(ts) AS d
-                FROM `{_project()}.{_dataset()}.environmental_factors`
-               WHERE type = 'air_quality'
-               GROUP BY d
-              HAVING AVG(multiplier) < 0.9
-            )
-            SELECT p.player_id,
-                   SUM(p.steps_delta) AS steps_bad_air,
-                   COUNT(DISTINCT DATE(p.ts)) AS bad_air_days_active
-              FROM `{_project()}.{_dataset()}.player_scoring_events` p
-              JOIN bad_air_days b ON DATE(p.ts) = b.d
-             GROUP BY p.player_id
-             ORDER BY steps_bad_air DESC
-             LIMIT {int(limit)}
-        """
-        return _run(sql)
-    return _cached(f"top-bad-air:{limit}", q)
+    sql = f"""
+        WITH bad_air_days AS (
+          SELECT DATE(ts) AS d
+            FROM `{_project()}.{_dataset()}.environmental_factors`
+           WHERE type = 'air_quality'
+           GROUP BY d
+          HAVING AVG(multiplier) < 0.9
+        )
+        SELECT p.player_id,
+               SUM(p.steps_delta) AS steps_bad_air,
+               COUNT(DISTINCT DATE(p.ts)) AS bad_air_days_active
+          FROM `{_project()}.{_dataset()}.player_scoring_events` p
+          JOIN bad_air_days b ON DATE(p.ts) = b.d
+         GROUP BY p.player_id
+         ORDER BY steps_bad_air DESC
+         LIMIT {int(limit)}
+    """
+    return _cached_bq_query(f"top-bad-air:{limit}", sql)
 
 
 @router.get("/user/{player_id}/history")
@@ -157,34 +160,29 @@ def user_history(player_id: str, days: int = Query(7, ge=1, le=90)):
     safe_pid = "".join(c for c in player_id if c.isalnum() or c in "-_")
     if not safe_pid:
         raise HTTPException(400, "player_id inválido")
-
-    def q():
-        sql = f"""
-            SELECT DATE(ts) AS day,
-                   SUM(steps_delta) AS steps,
-                   SUM(armies_earned) AS armies,
-                   SUM(distance_m) / 1000 AS km,
-                   COUNTIF(capped) AS capped_events
-              FROM `{_project()}.{_dataset()}.player_scoring_events`
-             WHERE player_id = '{safe_pid}'
-               AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(days)} DAY)
-             GROUP BY day
-             ORDER BY day
-        """
-        return _run(sql)
-    return _cached(f"user-history:{safe_pid}:{days}", q)
+    sql = f"""
+        SELECT DATE(ts) AS day,
+               SUM(steps_delta) AS steps,
+               SUM(armies_earned) AS armies,
+               SUM(distance_m) / 1000 AS km,
+               COUNTIF(capped) AS capped_events
+          FROM `{_project()}.{_dataset()}.player_scoring_events`
+         WHERE player_id = '{safe_pid}'
+           AND ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {int(days)} DAY)
+         GROUP BY day
+         ORDER BY day
+    """
+    return _cached_bq_query(f"user-history:{safe_pid}:{days}", sql)
 
 
 @router.get("/anti-cheat-rejects")
 def anti_cheat_rejects(limit: int = Query(50, ge=1, le=500)):
     """Últimos eventos rechazados por velocidad excesiva u otros motivos."""
-    def q():
-        sql = f"""
-            SELECT processed_at, source, reason, player_id
-              FROM `{_project()}.{_dataset()}.dead_letter`
-             WHERE processed_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
-             ORDER BY processed_at DESC
-             LIMIT {int(limit)}
-        """
-        return _run(sql)
-    return _cached(f"anti-cheat:{limit}", q)
+    sql = f"""
+        SELECT processed_at, source, reason, player_id
+          FROM `{_project()}.{_dataset()}.dead_letter`
+         WHERE processed_at >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
+         ORDER BY processed_at DESC
+         LIMIT {int(limit)}
+    """
+    return _cached_bq_query(f"anti-cheat:{limit}", sql)

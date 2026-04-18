@@ -123,7 +123,7 @@ def publish_to_pubsub(publisher, topic_path: str, event: dict, dry_run: bool) ->
     return True
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--project", default=os.environ.get("PROJECT_ID"))
     parser.add_argument("--date", default=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
@@ -131,8 +131,82 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--local-file", help="Usa este JSON local en vez del repo remoto")
     parser.add_argument("--force", action="store_true", help="Re-publica incluso si ya hay marker de hoy")
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+def _already_published_today(project: str, date: str) -> bool:
+    """Devuelve True si Firestore ya tiene marker `step_ingests/{date}`.
+
+    Si el chequeo falla (sin credenciales, Firestore caído), devolvemos
+    False y dejamos que el job publique igual — preferimos un duplicado
+    ocasional a perder ingesta de un día por un fallo transitorio.
+    """
+    try:
+        from google.cloud import firestore
+        db = firestore.Client(project=project)
+        marker = db.collection("step_ingests").document(date).get()
+        return marker.exists
+    except Exception as exc:
+        print(f"[fetcher] dedup check falló ({exc}); sigo sin dedup")
+        return False
+
+
+def _load_payload(args: argparse.Namespace, repo: str, branch: str, filename: str) -> dict:
+    """Lee el JSON del tracker — fichero local si se pasa `--local-file`,
+    si no, GET HTTPS al repo remoto. Aborta con `sys.exit` si falla la red."""
+    if args.local_file:
+        return fetch_local_json(Path(args.local_file))
+    try:
+        return fetch_remote_json(repo, branch, filename)
+    except Exception as exc:
+        sys.exit(f"[fetcher] no pude descargar {repo}/{filename}: {exc}")
+
+
+def _build_event(movement: dict, payload_user: str | None, mapping: dict[str, str], prev: dict | None) -> dict:
+    """Construye el evento CloudRISK a publicar a partir de un movement crudo."""
+    tracker_user = movement.get("user") or movement.get("username") or payload_user
+    return {
+        "player_id":   resolve_player_id(mapping, tracker_user),
+        "timestamp":   movement["timestamp"],
+        "latitude":    float(movement["latitude"]),
+        "longitude":   float(movement["longitude"]),
+        "speed_mps":   float(movement.get("speed_mps", 0.0)),
+        "steps_delta": estimate_steps_delta(movement, prev),
+        "source":      "real",
+        "ingested_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _publish_all_movements(payload: dict, mapping: dict[str, str], publisher, topic_path: str, dry_run: bool) -> int:
+    """Itera el feed, construye un evento por movement y publica. Devuelve cuántos se publicaron."""
+    movements = payload.get("movements", [])
+    print(f"[fetcher] {len(movements)} movements en el feed")
+    payload_user = payload.get("user")
+    published = 0
+    prev = None
+    for m in movements:
+        event = _build_event(m, payload_user, mapping, prev)
+        if publish_to_pubsub(publisher, topic_path, event, dry_run):
+            published += 1
+        prev = m
+    return published
+
+
+def _write_idempotency_marker(project: str, date: str, source_repo: str, published: int) -> None:
+    """Escribe `step_ingests/{date}` para que la próxima ejecución lo vea
+    y se salte el día (a menos que se pase `--force`)."""
+    from google.cloud import firestore
+    db = firestore.Client(project=project)
+    db.collection("step_ingests").document(date).set({
+        "date": date,
+        "source_repo": source_repo,
+        "published_events": published,
+        "finished_at": firestore.SERVER_TIMESTAMP,
+    }, merge=True)
+
+
+def main() -> None:
+    args = _parse_args()
     if not args.project:
         sys.exit("[fetcher] --project o PROJECT_ID env var requerido")
 
@@ -144,73 +218,30 @@ def main() -> None:
 
     print(f"[fetcher] project={args.project} date={args.date} topic={topic_name} dry={args.dry_run}")
 
-    # 1. Chequeo de dedup
-    if not args.force and not args.dry_run:
-        try:
-            from google.cloud import firestore
-            db = firestore.Client(project=args.project)
-            marker = db.collection("step_ingests").document(args.date).get()
-            if marker.exists:
-                print(f"[fetcher] marker step_ingests/{args.date} ya existe. Skip. (use --force para re-publicar)")
-                return
-        except Exception as exc:
-            print(f"[fetcher] dedup check falló ({exc}); sigo sin dedup")
+    # 1. Idempotencia: si ya publicamos hoy y no hay --force, salir.
+    if not args.force and not args.dry_run and _already_published_today(args.project, args.date):
+        print(f"[fetcher] marker step_ingests/{args.date} ya existe. Skip. (use --force para re-publicar)")
+        return
 
-    # 2. Descarga el JSON
-    if args.local_file:
-        payload = fetch_local_json(Path(args.local_file))
-    else:
-        try:
-            payload = fetch_remote_json(repo, branch, filename)
-        except Exception as exc:
-            sys.exit(f"[fetcher] no pude descargar {repo}/{filename}: {exc}")
-
-    movements = payload.get("movements", [])
-    print(f"[fetcher] {len(movements)} movements en el feed")
-
+    # 2. Carga el payload (remoto o local).
+    payload = _load_payload(args, repo, branch, filename)
     mapping = load_mapping(mapping_path)
 
-    # 3. Construye y publica eventos
-    if not args.dry_run:
+    # 3. Inicializa publisher (o stub si --dry-run) y publica el feed.
+    if args.dry_run:
+        publisher, topic_path = None, f"projects/{args.project}/topics/{topic_name}"
+    else:
         try:
             from google.cloud import pubsub_v1
         except ImportError:
             sys.exit("[fetcher] pip install google-cloud-pubsub")
         publisher = pubsub_v1.PublisherClient()
         topic_path = publisher.topic_path(args.project, topic_name)
-    else:
-        publisher, topic_path = None, f"projects/{args.project}/topics/{topic_name}"
+    published = _publish_all_movements(payload, mapping, publisher, topic_path, args.dry_run)
 
-    published = 0
-    prev = None
-    for m in movements:
-        tracker_user = m.get("user") or m.get("username") or payload.get("user")
-        player_id = resolve_player_id(mapping, tracker_user)
-        steps_delta = estimate_steps_delta(m, prev)
-        event = {
-            "player_id": player_id,
-            "timestamp": m["timestamp"],
-            "latitude": float(m["latitude"]),
-            "longitude": float(m["longitude"]),
-            "speed_mps": float(m.get("speed_mps", 0.0)),
-            "steps_delta": steps_delta,
-            "source": "real",
-            "ingested_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if publish_to_pubsub(publisher, topic_path, event, args.dry_run):
-            published += 1
-        prev = m
-
-    # 4. Escribe el marcador de idempotencia
+    # 4. Persiste el marker de idempotencia (skip en dry-run).
     if not args.dry_run:
-        from google.cloud import firestore
-        db = firestore.Client(project=args.project)
-        db.collection("step_ingests").document(args.date).set({
-            "date": args.date,
-            "source_repo": f"{repo}/{branch}/{filename}",
-            "published_events": published,
-            "finished_at": firestore.SERVER_TIMESTAMP,
-        }, merge=True)
+        _write_idempotency_marker(args.project, args.date, f"{repo}/{branch}/{filename}", published)
 
     print(f"[fetcher] OK — publicados {published} events a {topic_path}")
 
