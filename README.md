@@ -1,21 +1,12 @@
 # CloudRISK — Serverless Urban Conquest
 
 > **Camina Valencia. Cada paso es munición. Conquista los 87 barrios.**
-<<<<<<< HEAD
-> Proyecto 100 % **serverless** sobre Google Cloud Platform.
-=======
-> Juego de estrategia geolocalizado tipo *Risk* sobre Valencia,
-> construido como pipeline de datos **100 % serverless** en GCP.
 
-![Python](https://img.shields.io/badge/python-3.12-blue)
-![Node](https://img.shields.io/badge/node-20-brightgreen)
-![GCP](https://img.shields.io/badge/cloud-GCP-4285F4)
-![Terraform](https://img.shields.io/badge/iac-terraform-7B42BC)
+Proyecto 100 % **serverless** sobre Google Cloud Platform. Juego de estrategia geolocalizado tipo *Risk* sobre Valencia, construido como pipeline de datos **100 % serverless** en GCP.
 
 **Máster Big Data & Cloud · EDEM 2025/2026 · Serverless Computing**
 
 ---
->>>>>>> 27325de7d9b94427e6574c46798bd26185bffefd
 
 ## Índice
 
@@ -43,7 +34,6 @@
 8. [Demo accounts + comandos útiles](#8-demo-accounts--comandos-útiles)
 9. [Backup y restore de Firestore](#9-backup-y-restore-de-firestore)
 10. [Runbook](#10-runbook)
->>>>>>> 27325de7d9b94427e6574c46798bd26185bffefd
 
 ---
 
@@ -62,48 +52,7 @@ permanentemente (salvo el job de Dataflow, que por diseño mantiene estado).
 
 ## 2. Arquitectura
 
-```
-Walker (Cloud Run Job, sintético)          ─► Pub/Sub: player-movements ─┐
-Steps fetcher (Cloud Run Job, tracker)     ─► Pub/Sub: player-movements ─┤
-Air ingestor (Cloud Run Service)           ─► Pub/Sub: air-quality      ─┤
-Weather ingestor (Cloud Run Service)       ─► Pub/Sub: weather          ─┘
-                                                         │
-                             pipelines/cloudrisk_unified.py  (Dataflow streaming)
-                             StatefulScoringDoFn por player_id:
-                               · speed > 15 km/h   → DLQ anti-trampa
-                               · cap pasos diario  (30 000)
-                               · cap armies diario (50)
-                               · multiplicador ambiental (aire × clima)
-                               · timer 24 h resetea contadores
-                                         │
-                ┌────────────────────────┼─────────────────────────┐
-                ▼                        ▼                         ▼
-          Firestore                  BigQuery                BigQuery (DLQ)
-          user_balance/         player_scoring_events         dead_letter
-          users/                environmental_factors
-                ▲                        ▲
-                │                        │
-                └────  Backend FastAPI (Cloud Run)  ──────────────┐
-                       + /api/v1/analytics/* sobre BigQuery      │
-                                                                  ▼
-                                          Frontend React + MapLibre (Cloud Run)
-                                          /game (mapa) + /analytics (gráficos)
-```
-
-| Componente | Servicio GCP | Escala a cero |
-|---|---|:---:|
-| Walker (bot sintético) | Cloud Run Job | sí |
-| Steps fetcher (tracker GitHub) | Cloud Run Job | sí |
-| Ingestores (air, weather) | Cloud Run Service | no (`min-instances=1`) |
-| Backend FastAPI + /analytics | Cloud Run Service | sí |
-| Frontend React | Cloud Run Service | sí |
-| BD operativa | Firestore Native | — |
-| Histórico analítico | BigQuery | — |
-| Eventos | Pub/Sub | — |
-| Scoring streaming | Dataflow (Flex Template) | no (1 worker min) |
-| Secretos | Secret Manager | — |
-
----
+Insertamos la imagen resumen
 
 ## 3. Parámetros del juego
 
