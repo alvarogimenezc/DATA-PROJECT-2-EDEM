@@ -5,14 +5,14 @@
 Proyecto 100 % **serverless** sobre Google Cloud Platform. Juego de estrategia geolocalizado tipo *Risk* sobre Valencia, construido como pipeline de datos **100 % serverless** en GCP.
 
 ## Índice
-  - [1. Qué es CloudRISK]
-  - [2. Arquitectura]
-  - [3. Reglas del juego]
-  - [4. Flujo de datos]
-  - [5. Estructura de tablas - Firestores & BigQuery]
-  - [6. Arranque rápido en local]
-  - [7. Despliegue a GCP]
-  - [8. Resultados, aprendizajes y mejoras]
+  - 1. Qué es CloudRISK
+  - 2. Arquitectura
+  - 3. Reglas del juego
+  - 4. Flujo de datos
+  - 5. Estructura de tablas - Firestores & BigQuery
+  - 6. Arranque rápido en local
+  - 7. Despliegue a GCP
+  - 8. Resultados, aprendizajes y mejoras
 
 ---
 
@@ -37,7 +37,7 @@ Insertamos la imagen resumen dearquitectura - lo hace Álvaro a partir del miro
 
 ## 3. Reglas del juego
 
-Explicar las reglas del juego
+Explicar las reglas del juego, lógica que aplica dataflow de los multiplicadores etc. 
 
 ---
 
@@ -46,7 +46,6 @@ Explicar las reglas del juego
 Explicamos como funcionan los dos flujos de datos 
 - Flujo 1: pasos y multiplicadores + pipeline dataflow + inserts a las tablas
 - Flujo 2: Como el usuario selecciona ejercitos y los mete en las tablas
-
 
 ---
 
