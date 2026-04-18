@@ -232,8 +232,10 @@ class RiskAIBot(threading.Thread):
                     try:
                         self._post("/api/v1/turn/end")
                         self.log.info("out of moves → end turn")
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Mejor saberlo: si /turn/end falla repetidamente la
+                        # rotación se atasca. Sólo logueamos para no romper.
+                        self.log.warning("end-turn after no-op failed: %s", exc)
                 return
             verb, params = action
             if verb == "place":
@@ -267,8 +269,8 @@ class RiskAIBot(threading.Thread):
             # One action per turn keeps the rhythm visible in the preview.
             try:
                 self._post("/api/v1/turn/end")
-            except Exception:
-                pass
+            except Exception as exc:
+                self.log.warning("end-turn after action failed: %s", exc)
         except requests.HTTPError as exc:
             # Not catastrophic — typically "no power" or "zone not found" when
             # the game state changed between snapshot and action.
@@ -290,7 +292,7 @@ class RiskAIBot(threading.Thread):
         self.log.info("stopped")
 
 
-def main():
+def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--api", default=DEFAULT_API, help="API base URL.")
     p.add_argument("--players", nargs="+", default=DEFAULT_BOTS,
@@ -298,8 +300,11 @@ def main():
     p.add_argument("--password", default=DEFAULT_PASSWORD, help="Shared password for seeded players.")
     p.add_argument("--interval", type=int, default=10, help="Seconds between decisions per bot.")
     p.add_argument("--seed", type=int, default=None, help="Seed the RNG for reproducibility.")
-    args = p.parse_args()
+    return p.parse_args()
 
+
+def main():
+    args = _parse_args()
     rng = random.Random(args.seed) if args.seed is not None else random.Random()
 
     bots = [RiskAIBot(args.api, email, args.password, args.interval, rng)

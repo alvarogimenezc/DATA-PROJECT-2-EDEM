@@ -24,29 +24,44 @@ class StepSync(BaseModel):
     lng: Optional[float] = None
 
 
+def _apply_step_rewards(user: dict, step_count: int) -> dict:
+    """Convierte pasos en power+gold y persiste user, clan y log.
+
+    Devuelve `{"power_earned", "gold_earned", "log"}` para que el caller
+    pueda completar la respuesta. **No** publica a Pub/Sub — eso lo decide
+    el caller (los dos puntos de entrada manejan el error de pubsub
+    de forma distinta: el endpoint loguea, el WS lo silencia).
+    """
+    power_earned = step_count // settings.POWER_PER_STEPS
+    gold_earned = step_count // 50  # 50 pasos = 1 moneda de oro
+    log = pasos_repo.create_step_log(user["id"], step_count, power_earned)
+    usuarios_repo.update_user(user["id"], {
+        "steps_total": user.get("steps_total", 0) + step_count,
+        "power_points": user.get("power_points", 0) + power_earned,
+        "gold": user.get("gold", 0) + gold_earned,
+    })
+    if user.get("clan_id"):
+        clan = clanes_repo.get_clan_by_id(user["clan_id"])
+        if clan:
+            clanes_repo.update_clan(user["clan_id"], {
+                "total_power": clan.get("total_power", 0) + power_earned,
+            })
+    return {"power_earned": power_earned, "gold_earned": gold_earned, "log": log}
+
+
 @router.post("/sync", status_code=201)
 def sync_steps(data: StepSync, current_user: dict = Depends(get_current_user)):
     if data.steps <= 0:
         raise HTTPException(status_code=400, detail="Steps must be a positive number")
-    power_earned = data.steps // settings.POWER_PER_STEPS
-    gold_earned = data.steps // 50  # 50 pasos = 1 moneda de oro
-    log = pasos_repo.create_step_log(current_user["id"], data.steps, power_earned)
-    usuarios_repo.update_user(current_user["id"], {
-        "steps_total": current_user.get("steps_total", 0) + data.steps,
-        "power_points": current_user.get("power_points", 0) + power_earned,
-        "gold": current_user.get("gold", 0) + gold_earned,
-    })
-    if current_user.get("clan_id"):
-        clan = clanes_repo.get_clan_by_id(current_user["clan_id"])
-        if clan:
-            clanes_repo.update_clan(current_user["clan_id"], {
-                "total_power": clan.get("total_power", 0) + power_earned,
-            })
+    rewards = _apply_step_rewards(current_user, data.steps)
     try:
-        pubsub_publisher.publish_step_event(current_user["id"], data.steps, power_earned)
+        pubsub_publisher.publish_step_event(
+            current_user["id"], data.steps, rewards["power_earned"],
+        )
     except Exception as exc:
         logger.warning(f"Pub/Sub step publish failed for {current_user['id']}: {exc}")
-    log["gold_earned"] = gold_earned
+    log = rewards["log"]
+    log["gold_earned"] = rewards["gold_earned"]
     return log
 
 
@@ -126,26 +141,15 @@ def realtime_ingestion_status(current_user: dict = Depends(get_current_user)):
 def _sync_step_update(user_id: str, step_count: int) -> None:
     if step_count <= 0:
         return
-    power_earned = step_count // settings.POWER_PER_STEPS
-    gold_earned = step_count // 50
-    pasos_repo.create_step_log(user_id, step_count, power_earned)
     user = usuarios_repo.get_user_by_id(user_id)
     if not user:
         return
-    usuarios_repo.update_user(user_id, {
-        "steps_total": user.get("steps_total", 0) + step_count,
-        "power_points": user.get("power_points", 0) + power_earned,
-        "gold": user.get("gold", 0) + gold_earned,
-    })
-    if user.get("clan_id"):
-        clan = clanes_repo.get_clan_by_id(user["clan_id"])
-        if clan:
-            clanes_repo.update_clan(user["clan_id"], {
-                "total_power": clan.get("total_power", 0) + power_earned,
-            })
+    rewards = _apply_step_rewards(user, step_count)
     try:
-        pubsub_publisher.publish_step_event(user_id, step_count, power_earned)
+        pubsub_publisher.publish_step_event(user_id, step_count, rewards["power_earned"])
     except Exception:
+        # Camino WS: silenciamos el error a propósito para no romper la
+        # actualización en vivo si Pub/Sub no está disponible.
         pass
 
 

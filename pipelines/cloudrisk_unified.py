@@ -77,6 +77,9 @@ DEFAULT_POWER_PER_STEPS = int(os.environ.get("POWER_PER_STEPS", "500"))
 DEFAULT_DAILY_ARMY_CAP = int(os.environ.get("DAILY_ARMY_CAP", "50"))
 DEFAULT_MAX_SPEED_KMH = float(os.environ.get("MAX_SPEED_KMH", "15"))
 DEFAULT_DAILY_STEPS_CAP = int(os.environ.get("DAILY_STEPS_CAP", "30000"))
+# Multiplicador ambiental que asumimos cuando aún no ha llegado ningún
+# evento de aire/clima al side input — neutral, no penaliza ni premia.
+DEFAULT_ENV_MULTIPLIER = 1.0
 # Horas entre resets de los contadores diarios (armies_today, steps_today).
 # No es parametrizable por evento: es una constante operativa.
 DAILY_RESET_HOURS = 24.0
@@ -138,6 +141,33 @@ def now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def parse_iso_ts(ts_str: str) -> datetime:
+    """Parsea un ISO-8601 con o sin sufijo Z. Si falla, devuelve `now()` en UTC.
+
+    Lo usamos en dos sitios (parse del evento y reset del timer) — centralizar
+    aquí evita el `try/except ValueError` repetido y deja claro el fallback.
+    """
+    try:
+        return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except (ValueError, AttributeError, TypeError):
+        return datetime.now(timezone.utc)
+
+
+def dlq_record(source: str, reason: str, player_id, raw_payload: str) -> dict:
+    """Construye una fila para la tabla `dead_letter` en BQ.
+
+    Llamado desde 5 sitios (los 3 DoFns de parse + scoring), por eso vive
+    suelto a nivel módulo en vez de duplicar la misma estructura inline.
+    """
+    return {
+        "source": source,
+        "reason": reason,
+        "player_id": player_id,
+        "raw_payload": raw_payload,
+        "processed_at": now_utc_iso(),
+    }
+
+
 # ─── Parse DoFns ──────────────────────────────────────────────────────────────
 class ParseMovement(beam.DoFn):
     """Decodifica un mensaje player-movements. TaggedOutput 'dlq' si falla."""
@@ -147,24 +177,22 @@ class ParseMovement(beam.DoFn):
         try:
             msg = json.loads(raw.decode("utf-8"))
         except Exception as exc:
-            yield beam.pvalue.TaggedOutput(self.DLQ, {
-                "source": "player-movements",
-                "reason": f"json_decode: {exc}",
-                "player_id": None,
-                "raw_payload": raw[:500].decode("utf-8", errors="replace"),
-                "processed_at": now_utc_iso(),
-            })
+            yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
+                source="player-movements",
+                reason=f"json_decode: {exc}",
+                player_id=None,
+                raw_payload=raw[:500].decode("utf-8", errors="replace"),
+            ))
             return
 
         pid = msg.get("player_id")
         if not pid:
-            yield beam.pvalue.TaggedOutput(self.DLQ, {
-                "source": "player-movements",
-                "reason": "missing_player_id",
-                "player_id": None,
-                "raw_payload": json.dumps(msg),
-                "processed_at": now_utc_iso(),
-            })
+            yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
+                source="player-movements",
+                reason="missing_player_id",
+                player_id=None,
+                raw_payload=json.dumps(msg),
+            ))
             return
 
         yield (pid, {
@@ -185,13 +213,12 @@ class ParseEnvironment(beam.DoFn):
         try:
             msg = json.loads(raw.decode("utf-8"))
         except Exception as exc:
-            yield beam.pvalue.TaggedOutput(self.DLQ, {
-                "source": "environmental",
-                "reason": f"json_decode: {exc}",
-                "player_id": None,
-                "raw_payload": raw[:500].decode("utf-8", errors="replace"),
-                "processed_at": now_utc_iso(),
-            })
+            yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
+                source="environmental",
+                reason=f"json_decode: {exc}",
+                player_id=None,
+                raw_payload=raw[:500].decode("utf-8", errors="replace"),
+            ))
             return
 
         mtype = msg.get("type")
@@ -200,23 +227,21 @@ class ParseEnvironment(beam.DoFn):
         elif mtype == "weather":
             mult = msg.get("indice_multiplicador_tiempo")
         else:
-            yield beam.pvalue.TaggedOutput(self.DLQ, {
-                "source": "environmental",
-                "reason": f"unsupported_type:{mtype!r}",
-                "player_id": None,
-                "raw_payload": json.dumps(msg),
-                "processed_at": now_utc_iso(),
-            })
+            yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
+                source="environmental",
+                reason=f"unsupported_type:{mtype!r}",
+                player_id=None,
+                raw_payload=json.dumps(msg),
+            ))
             return
 
         if mult is None:
-            yield beam.pvalue.TaggedOutput(self.DLQ, {
-                "source": "environmental",
-                "reason": "missing_multiplier",
-                "player_id": None,
-                "raw_payload": json.dumps(msg),
-                "processed_at": now_utc_iso(),
-            })
+            yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
+                source="environmental",
+                reason="missing_multiplier",
+                player_id=None,
+                raw_payload=json.dumps(msg),
+            ))
             return
 
         # Para BQ environmental_factors
@@ -287,84 +312,109 @@ class StatefulScoringDoFn(beam.DoFn):
         self.daily_cap = int(daily_cap)
         self.daily_steps_cap = int(daily_steps_cap)
 
+    # ─── Helpers internos (puros, sin tocar estado Beam) ──────────────────────
+    @staticmethod
+    def _calculate_speed_kmh(prev, lat, lon, ev_ts):
+        """Devuelve `(distance_m, speed_kmh)` vs. la última posición.
+
+        Si no había posición previa o falta alguna coordenada, devuelve `(0, 0)`
+        (no hay cómo calcular velocidad). `dt_s` se acota a 1µs para evitar
+        división por cero si dos eventos llegan con el mismo timestamp.
+        """
+        sin_posicion_previa = (
+            not prev
+            or lat is None or lon is None
+            or prev.get("lat") is None or prev.get("lon") is None
+        )
+        if sin_posicion_previa:
+            return 0.0, 0.0
+        distance_m = haversine_m(prev["lat"], prev["lon"], lat, lon)
+        dt_s = max(1e-6, (ev_ts - prev["ts"]).total_seconds())
+        speed_kmh = (distance_m / 1000.0) / (dt_s / 3600.0)
+        return distance_m, speed_kmh
+
+    def _compute_armies(self, allowed_steps, env_factor, today_so_far):
+        """Aplica el cap diario de armies y devuelve `(armies_earned, capped)`.
+
+        `armies_earned` nunca supera `daily_cap - today_so_far`; el resto se
+        descarta. `capped=True` significa que se truncó por este cap (no por
+        el de pasos — esos son flags separados).
+        """
+        raw_armies = int((allowed_steps // self.power_per_steps) * env_factor)
+        remaining = max(0, self.daily_cap - today_so_far)
+        return min(raw_armies, remaining), raw_armies > remaining
+
     def process(
         self,
         keyed_event,
-        env_mult=1.0,
+        env_mult=DEFAULT_ENV_MULTIPLIER,
         last_pos=beam.DoFn.StateParam(LAST_POS_STATE),
         armies_today=beam.DoFn.StateParam(ARMIES_TODAY_STATE),
         steps_today=beam.DoFn.StateParam(STEPS_TODAY_STATE),
         daily_timer=beam.DoFn.TimerParam(DAILY_RESET_TIMER),
     ):
         player_id, evt = keyed_event
-        try:
-            ev_ts = datetime.fromisoformat(evt["ts"].replace("Z", "+00:00"))
-        except Exception:
-            ev_ts = datetime.now(timezone.utc)
+        ev_ts = parse_iso_ts(evt["ts"])
 
         lat, lon = evt.get("latitude"), evt.get("longitude")
         steps = int(evt.get("steps_delta", 0))
 
+        # 1) Calcula velocidad vs. la última posición conocida.
         prev = last_pos.read()
-        distance_m = 0.0
-        speed_kmh = 0.0
-        if prev and lat is not None and lon is not None \
-                and prev.get("lat") is not None and prev.get("lon") is not None:
-            distance_m = haversine_m(prev["lat"], prev["lon"], lat, lon)
-            dt_s = max(1e-6, (ev_ts - prev["ts"]).total_seconds())
-            speed_kmh = (distance_m / 1000.0) / (dt_s / 3600.0)
+        distance_m, speed_kmh = self._calculate_speed_kmh(prev, lat, lon, ev_ts)
 
-        # Anti-trampa — rechazar si velocidad > límite (y había registro previo)
+        # 2) Anti-trampa: rechazar si la velocidad supera el límite.
+        # Importante: `return` aquí salta TODOS los writes a estado, así el
+        # evento tramposo no contamina los contadores diarios ni la posición.
         if speed_kmh > self.max_speed_kmh:
-            yield beam.pvalue.TaggedOutput(self.DLQ, {
-                "source": "player-movements",
-                "reason": f"anti_cheat_speed:{speed_kmh:.2f}kmh>{self.max_speed_kmh}",
-                "player_id": player_id,
-                "raw_payload": json.dumps(evt.get("raw", {})),
-                "processed_at": now_utc_iso(),
-            })
+            yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
+                source="player-movements",
+                reason=f"anti_cheat_speed:{speed_kmh:.2f}kmh>{self.max_speed_kmh}",
+                player_id=player_id,
+                raw_payload=json.dumps(evt.get("raw", {})),
+            ))
             return
 
-        # Cap de pasos diario — truncar steps si el acumulado del día rebasa
-        # el cap. El exceso se descarta (no entra en armies ni en total_steps).
-        steps_so_far = int(steps_today.read() or 0)
-        remaining_steps = max(0, self.daily_steps_cap - steps_so_far)
-        allowed_steps = min(steps, remaining_steps)
-        steps_capped = allowed_steps < steps
+        # 3) Cap de pasos diario — el exceso se descarta. No entra ni en
+        # armies ni en total_steps. Es la segunda barrera anti-trampa
+        # (complementa al speed check).
+        pasos_hoy = int(steps_today.read() or 0)
+        pasos_restantes_cap = max(0, self.daily_steps_cap - pasos_hoy)
+        pasos_permitidos = min(steps, pasos_restantes_cap)
+        steps_capped = pasos_permitidos < steps
 
-        env_factor = float(env_mult) if env_mult is not None else 1.0
-
-        raw_armies = int((allowed_steps // self.power_per_steps) * env_factor)
-
-        # Límite diario de armies
+        # 4) Calcula armies con el multiplicador ambiental + cap diario.
+        env_factor = float(env_mult) if env_mult is not None else DEFAULT_ENV_MULTIPLIER
         today_so_far = int(armies_today.read() or 0)
-        remaining = max(0, self.daily_cap - today_so_far)
-        armies_capped = raw_armies > remaining
-        armies_earned = min(raw_armies, remaining)
+        armies_earned, armies_capped = self._compute_armies(
+            pasos_permitidos, env_factor, today_so_far,
+        )
         # `capped` en BQ señaliza que *algo* se truncó — cap de armies o de pasos.
         capped = armies_capped or steps_capped
 
-        # Actualiza estado sólo si el evento es válido (pasa anti-trampa)
+        # 5) Actualiza estado sólo si el evento es válido (pasa anti-trampa).
         last_pos.write({"lat": lat, "lon": lon, "ts": ev_ts})
-        if allowed_steps > 0:
-            steps_today.add(allowed_steps)
+        if pasos_permitidos > 0:
+            steps_today.add(pasos_permitidos)
         if armies_earned > 0:
             armies_today.add(armies_earned)
 
-        # Programa reset diario (idempotente por nombre de timer). Apunta a
-        # ev_ts + 24 h en processing-time; Beam sobreescribe en cada evento.
+        # 6) Programa reset diario. El timer es idempotente por nombre, así que
+        # cada llamada a `set()` SOBREESCRIBE el anterior — el cooldown de 24 h
+        # se reinicia en cada evento, no se acumula. Si no llegan eventos, el
+        # último timer programado dispara igualmente y limpia los contadores.
         next_reset = (ev_ts + timedelta(hours=DAILY_RESET_HOURS)).timestamp()
         daily_timer.set(next_reset)
 
-        # Evento enriquecido — una copia para BQ, otra para Firestore.
+        # 7) Evento enriquecido — una copia para BQ, otra para Firestore.
         # `steps_delta` ahora es el valor **permitido** (post-cap), para que
         # Firestore y BQ cuadren con "qué computó realmente el jugador".
-        scoring_row = {
+        yield {
             "player_id": player_id,
             "ts": evt["ts"],
             "latitude": lat,
             "longitude": lon,
-            "steps_delta": allowed_steps,
+            "steps_delta": pasos_permitidos,
             "distance_m": round(distance_m, 2),
             "speed_kmh": round(speed_kmh, 3),
             "env_multiplier": round(env_factor, 3),
@@ -376,7 +426,6 @@ class StatefulScoringDoFn(beam.DoFn):
             "capped": capped,
             "processed_at": now_utc_iso(),
         }
-        yield scoring_row
 
     @on_timer(DAILY_RESET_TIMER)
     def _on_daily_reset(

@@ -147,50 +147,28 @@ def load_zones() -> list[dict]:
 # ---------------------------------------------------------------------------
 # Escribe todo a Firestore
 # ---------------------------------------------------------------------------
-def seed_firestore(project: str, state: dict, zones: list[dict], dry_run: bool) -> None:
-    section("Firestore — jugadores, zonas, balances y batallas")
-
-    players = state["players"]
-    zone_ownership = state["zone_ownership"]
-    recent_battles = state["recent_battles"]
-
-    # Construye un mapa plano zone_id → (owner_id, color)
+def _build_owner_map(zone_ownership: dict, zones: list[dict]) -> dict[str, tuple[str, str, int]]:
+    """Aplana `zone_ownership` (estructura por owner) en un mapa
+    `zone_id → (owner_id, color, armies)`. Salta zonas que no existen en
+    `VALENCIA_ZONES` y entradas de metadatos (`_comment`)."""
+    valid = {z["id"] for z in zones}
     owner_by_zone: dict[str, tuple[str, str, int]] = {}
-    zone_ids_valid = {z["id"] for z in zones}
     for owner_id, blob in zone_ownership.items():
         if owner_id.startswith("_") or not isinstance(blob, dict):
-            continue  # salta las claves de metadatos tipo _comment
+            continue
         color = blob["color"]
         armies = blob["armies_per_zone"]
         for z in blob["zones"]:
-            if z not in zone_ids_valid:
+            if z not in valid:
                 warn(f"zone '{z}' assigned to {owner_id} is not in VALENCIA_ZONES — skipped")
                 continue
             owner_by_zone[z] = (owner_id, color, armies)
+    return owner_by_zone
 
-    if dry_run:
-        info(f"would write users/ × {len(players)}")
-        info(f"would write zones/ × {len(zones)}")
-        info(f"would write user_balance/ × {len(players)} (with ongoing game stats)")
-        info(f"would write location_balance/ × {len(zones)} ({len(owner_by_zone)} owned, {len(zones) - len(owner_by_zone)} free)")
-        info(f"would write battles/ × {len(recent_battles)}")
-        return
 
-    try:
-        from google.cloud import firestore
-    except ImportError:
-        sys.exit("[demo] google-cloud-firestore not installed. Run: pip install google-cloud-firestore passlib[bcrypt]")
-
-    try:
-        from passlib.context import CryptContext
-    except ImportError:
-        sys.exit("[demo] passlib not installed. Run: pip install passlib[bcrypt]")
-
-    pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
-    db = firestore.Client(project=project)
-    now = datetime.now(timezone.utc)
-
-    # users/
+def _seed_users(db, players: list[dict], pwd) -> None:
+    """Crea documentos `users/{id}` con hash bcrypt y todos los campos extendidos."""
+    from google.cloud import firestore
     for p in players:
         db.collection("users").document(p["id"]).set({
             "id": p["id"],
@@ -212,7 +190,9 @@ def seed_firestore(project: str, state: dict, zones: list[dict], dry_run: bool) 
         }, merge=True)
     ok(f"{len(players)} users/ written (login: {players[0]['email']} / demo1234)")
 
-    # zones/ — catálogo estático + estado (dueño, armies, nivel defensa)
+
+def _seed_zones(db, zones: list[dict], owner_by_zone: dict, started_at: str) -> None:
+    """Persiste `zones/{id}` con su geometría estática + estado (owner, armies, defensa)."""
     conquered = 0
     for z in zones:
         owner_tuple = owner_by_zone.get(z["id"])
@@ -223,7 +203,7 @@ def seed_firestore(project: str, state: dict, zones: list[dict], dry_run: bool) 
                 "owner_clan_id": owner_id,
                 "owner_color": color,
                 "defense_level": armies,
-                "conquered_at": state["game_time"]["started_at"],
+                "conquered_at": started_at,
             })
             conquered += 1
         else:
@@ -236,7 +216,11 @@ def seed_firestore(project: str, state: dict, zones: list[dict], dry_run: bool) 
         db.collection("zones").document(z["id"]).set(doc, merge=True)
     ok(f"{len(zones)} zones/ written ({conquered} owned, {len(zones) - conquered} free)")
 
-    # user_balance/ — contrato del equipo
+
+def _seed_balances(db, players: list[dict], zones: list[dict],
+                   owner_by_zone: dict, now: datetime) -> None:
+    """Crea las dos colecciones del contrato del equipo:
+    `user_balance/` (por jugador) y `location_balance/` (por zona)."""
     for p in players:
         db.collection("user_balance").document(p["id"]).set({
             "armies": p["armies"],
@@ -248,27 +232,20 @@ def seed_firestore(project: str, state: dict, zones: list[dict], dry_run: bool) 
         }, merge=True)
     ok(f"{len(players)} user_balance/ written (team contract schema)")
 
-    # location_balance/ — contrato del equipo
     for z in zones:
         owner_tuple = owner_by_zone.get(z["id"])
         if owner_tuple:
             owner_id, _, armies = owner_tuple
-            db.collection("location_balance").document(z["id"]).set({
-                "armies": armies,
-                "owner": owner_id,
-                "location_name": z["name"],
-                "updated_at": now,
-            }, merge=True)
+            payload = {"armies": armies, "owner": owner_id}
         else:
-            db.collection("location_balance").document(z["id"]).set({
-                "armies": 0,
-                "owner": None,
-                "location_name": z["name"],
-                "updated_at": now,
-            }, merge=True)
+            payload = {"armies": 0, "owner": None}
+        payload.update({"location_name": z["name"], "updated_at": now})
+        db.collection("location_balance").document(z["id"]).set(payload, merge=True)
     ok(f"{len(zones)} location_balance/ written")
 
-    # battles/ — histórico de batallas recientes
+
+def _seed_battles(db, recent_battles: list[dict]) -> None:
+    """Inserta el histórico de batallas demo en la colección `battles/`."""
     for i, b in enumerate(recent_battles):
         battle_id = f"battle-{b['ts'].replace(':', '').replace('-', '').replace('T', '')[:15]}-{i}"
         db.collection("battles").document(battle_id).set({
@@ -276,6 +253,43 @@ def seed_firestore(project: str, state: dict, zones: list[dict], dry_run: bool) 
             "ts": datetime.fromisoformat(b["ts"].replace("Z", "+00:00")),
         }, merge=True)
     ok(f"{len(recent_battles)} battles/ written (últimas batallas visibles en el dashboard)")
+
+
+def seed_firestore(project: str, state: dict, zones: list[dict], dry_run: bool) -> None:
+    """Orquestador: construye el mapa de propietarios y delega en los 4
+    seed-helpers (users, zones, balances, battles). En modo dry-run sólo
+    cuenta lo que escribiría."""
+    section("Firestore — jugadores, zonas, balances y batallas")
+
+    players = state["players"]
+    recent_battles = state["recent_battles"]
+    owner_by_zone = _build_owner_map(state["zone_ownership"], zones)
+
+    if dry_run:
+        info(f"would write users/ × {len(players)}")
+        info(f"would write zones/ × {len(zones)}")
+        info(f"would write user_balance/ × {len(players)} (with ongoing game stats)")
+        info(f"would write location_balance/ × {len(zones)} ({len(owner_by_zone)} owned, {len(zones) - len(owner_by_zone)} free)")
+        info(f"would write battles/ × {len(recent_battles)}")
+        return
+
+    try:
+        from google.cloud import firestore
+    except ImportError:
+        sys.exit("[demo] google-cloud-firestore not installed. Run: pip install google-cloud-firestore passlib[bcrypt]")
+    try:
+        from passlib.context import CryptContext
+    except ImportError:
+        sys.exit("[demo] passlib not installed. Run: pip install passlib[bcrypt]")
+
+    pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    db = firestore.Client(project=project)
+    now = datetime.now(timezone.utc)
+
+    _seed_users(db, players, pwd)
+    _seed_zones(db, zones, owner_by_zone, state["game_time"]["started_at"])
+    _seed_balances(db, players, zones, owner_by_zone, now)
+    _seed_battles(db, recent_battles)
 
 
 # ---------------------------------------------------------------------------

@@ -249,6 +249,98 @@ def end_turn(current_user: dict = Depends(get_current_user)):
 
 # ─── CloudRISK v3 setup — "Clustered Risk" rules ────────────────────────
 
+
+def _compute_zones_with_centroid(zones: list[dict]) -> list[tuple[dict, tuple[float, float]]]:
+    """Filtra las zonas que tienen geojson válido y devuelve `(zone, centroid)`.
+
+    Las zonas sin centroide computable (sin geometría) quedan fuera; el caller
+    las marcará como libres más tarde para no perderlas.
+    """
+    result: list[tuple[dict, tuple[float, float]]] = []
+    for z in zones:
+        c = _zone_centroid(z)
+        if c is None:
+            continue
+        result.append((z, c))
+    return result
+
+
+def _assign_zones_to_players(
+    zones_with_centroid: list[tuple[dict, tuple[float, float]]],
+    seeds: list[dict],
+    order: list[str],
+) -> tuple[dict[str, list[str]], set[str]]:
+    """Asigna `ZONES_PER_PLAYER_TARGET` zonas a cada jugador en round-robin
+    greedy por proximidad a su semilla.
+
+    Devuelve `(assignments, taken)` donde:
+      - `assignments[player_id]` = lista de zona_ids (incluye su semilla).
+      - `taken` = set con todas las zona_ids ya asignadas (para diferenciar
+        las que quedan libres por estar fuera del cluster).
+    """
+    seed_centroids = [_zone_centroid(s) for s in seeds]
+    seed_owners = dict(zip(order, seeds))    # player_id → seed zone
+    seed_ids = {s["id"] for s in seeds}
+
+    # Para cada jugador, lista priorizada de candidatos (zonas no-semilla
+    # ordenadas de más cercana a más lejana a su semilla).
+    candidates: dict[int, list[tuple[float, str]]] = {i: [] for i in range(len(order))}
+    for zone, centroid in zones_with_centroid:
+        if zone["id"] in seed_ids:
+            continue
+        for player_idx in range(len(order)):
+            dist = _distance(centroid, seed_centroids[player_idx])
+            candidates[player_idx].append((dist, zone["id"]))
+    for pidx in candidates:
+        candidates[pidx].sort()
+
+    assignments: dict[str, list[str]] = {p: [seed_owners[p]["id"]] for p in order}
+    taken: set[str] = {seed_owners[p]["id"] for p in order}
+    progress = [0] * len(order)   # puntero por jugador dentro de su lista de candidatos
+
+    # Round-robin: cada jugador toma su siguiente candidato no asignado hasta
+    # llegar al target o agotarse los candidatos.
+    target = ZONES_PER_PLAYER_TARGET
+    repartiendo = True
+    while repartiendo:
+        repartiendo = False
+        for pidx, player_id in enumerate(order):
+            if len(assignments[player_id]) >= target:
+                continue
+            while progress[pidx] < len(candidates[pidx]):
+                _, zid = candidates[pidx][progress[pidx]]
+                progress[pidx] += 1
+                if zid not in taken:
+                    assignments[player_id].append(zid)
+                    taken.add(zid)
+                    repartiendo = True
+                    break
+
+    return assignments, taken
+
+
+def _apply_zone_assignments(
+    assignments: dict[str, list[str]],
+    free_ids: set[str],
+):
+    """Persiste el setup: zonas asignadas con su owner + garrison mínimo,
+    zonas libres con `owner_clan_id=None`."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for player_id, zone_ids in assignments.items():
+        for zone_id in zone_ids:
+            zonas_repo.update_zone(zone_id, {
+                "owner_clan_id": player_id,
+                "defense_level": MIN_ARMIES_PER_ZONE,
+                "conquered_at": now_iso,
+            })
+    for zid in free_ids:
+        zonas_repo.update_zone(zid, {
+            "owner_clan_id": None,
+            "defense_level": 0,
+            "conquered_at": None,
+        })
+
+
 @router.post("/setup", tags=["setup"])
 def setup_game(
     x_scheduler_token: Optional[str] = Header(None, alias="X-Scheduler-Token"),
@@ -287,105 +379,38 @@ def setup_game(
     if not zones:
         raise HTTPException(status_code=500, detail="No zones seeded")
 
-    rng = random.Random()
-
-    # Paso 1 — centroides
-    zones_with_centroid: list[tuple[dict, tuple[float, float]]] = []
-    skipped_no_geo = 0
-    for z in zones:
-        c = _zone_centroid(z)
-        if c is None:
-            skipped_no_geo += 1
-            continue
-        zones_with_centroid.append((z, c))
-
+    # Pasos 1+2 — centroides y semillas.
+    zones_with_centroid = _compute_zones_with_centroid(zones)
     if len(zones_with_centroid) < 10:
         raise HTTPException(
             status_code=500,
             detail=f"Too few zones with geojson to cluster ({len(zones_with_centroid)})",
         )
 
-    # Paso 2 — 4 semillas separadas
+    rng = random.Random()
     seeds = _pick_four_spread_seeds(zones_with_centroid, rng)
-    seed_centroids = [_zone_centroid(s) for s in seeds]
     order = game_state.DEFAULT_PLAYER_ORDER
-    seed_owners = dict(zip(order, seeds))    # player_id → seed zone
+    seed_owners = dict(zip(order, seeds))
 
-    # Paso 3 — para cada zona, calcular distancia a cada semilla
-    # Luego asignar las 15 más cercanas a cada semilla en orden de prioridad.
-    non_seed_centroids: list[tuple[dict, tuple[float, float]]] = [
-        (z, c) for z, c in zones_with_centroid if z["id"] not in {s["id"] for s in seeds}
-    ]
+    # Paso 3 — clustering greedy round-robin por cercanía a semilla.
+    assignments, taken = _assign_zones_to_players(zones_with_centroid, seeds, order)
 
-    # Calcular distancias (zona_id → lista de (dist, player_idx))
-    distances: dict[str, list[tuple[float, int]]] = {}
-    for zone, centroid in non_seed_centroids:
-        dists = [(
-            _distance(centroid, seed_centroids[i]),
-            i,
-        ) for i in range(len(order))]
-        dists.sort()    # ascending
-        distances[zone["id"]] = dists
-
-    # Asignación greedy: cada jugador "pide" de a una las zonas más cercanas
-    # que no hayan sido tomadas, hasta llegar a ZONES_PER_PLAYER_TARGET - 1
-    # (ya tienen su semilla).
-    assignments: dict[str, list[str]] = {p: [seed_owners[p]["id"]] for p in order}
-    taken: set[str] = {seed_owners[p]["id"] for p in order}
-    # Lista ordenada de candidatos por jugador: zona_id → prioridad asc
-    candidates: dict[int, list[tuple[float, str]]] = {i: [] for i in range(len(order))}
-    for zone_id, dists in distances.items():
-        for dist, player_idx in dists:
-            candidates[player_idx].append((dist, zone_id))
-    for pidx in candidates:
-        candidates[pidx].sort()
-
-    target = ZONES_PER_PLAYER_TARGET
-    # round-robin pick hasta que cada jugador tenga target zonas o se acabe
-    progress = [0] * len(order)   # por jugador, puntero dentro de candidates
-    done = False
-    while not done:
-        done = True
-        for pidx, player_id in enumerate(order):
-            if len(assignments[player_id]) >= target:
-                continue
-            # buscar el siguiente candidato no tomado
-            while progress[pidx] < len(candidates[pidx]):
-                _, zid = candidates[pidx][progress[pidx]]
-                progress[pidx] += 1
-                if zid not in taken:
-                    assignments[player_id].append(zid)
-                    taken.add(zid)
-                    done = False
-                    break
-
-    # Paso 4 — aplicar updates a Firestore / in-memory store
-    now_iso = datetime.now(timezone.utc).isoformat()
+    # Conjuntos derivados: las zonas SIN geojson y las que quedaron fuera del
+    # round-robin se marcan ambas como libres (cualquiera las puede reclamar).
     all_cluster_ids = {z["id"] for z, _ in zones_with_centroid}
-    for zone_id, player_id in [(zid, p) for p, ids in assignments.items() for zid in ids]:
-        zonas_repo.update_zone(zone_id, {
-            "owner_clan_id": player_id,
-            "defense_level": MIN_ARMIES_PER_ZONE,
-            "conquered_at": now_iso,
-        })
-    # Zonas no asignadas EN EL CLUSTERING → libres
-    free_in_cluster = all_cluster_ids - taken
-    # Zonas SIN geojson (no pudieron clusterizarse) → también libres
     all_db_ids = {z["id"] for z in zones}
+    free_in_cluster = all_cluster_ids - taken
     free_no_geo = all_db_ids - all_cluster_ids
     free_ids = free_in_cluster | free_no_geo
-    for zid in free_ids:
-        zonas_repo.update_zone(zid, {
-            "owner_clan_id": None,
-            "defense_level": 0,
-            "conquered_at": None,
-        })
 
-    # Paso 5 — pool inicial
+    # Paso 4 — persistir asignaciones y zonas libres.
+    _apply_zone_assignments(assignments, free_ids)
+
+    # Paso 5 — pool inicial de armies para cada jugador.
     for pid in order:
         usuarios_repo.update_user(pid, {"power_points": STARTING_POOL})
 
-    # Paso 6 — reset turno
+    # Paso 6 — reset del estado de turno (Norte arranca, fase reinforce).
     game_state.reset()
 
     return {
