@@ -1,17 +1,5 @@
 # pipelines/ — Jobs de streaming en Dataflow
 
-Pipelines Apache Beam para la capa de data engineering de CloudRISK.
-
-> **Cambio de arquitectura (2026-04):** antes había dos pipelines separados
-> (`ambiental_a_bq.py` para clima/aire y `src/dataflow_pipeline/pipeline.py`
-> para pasos) más un Cloud Run `puntuador_horario.py`. **Todo eso se ha
-> absorbido en un único pipeline unificado** — `cloudrisk_unified.py` —
-> con *stateful DoFn* por `player_id`. Los otros scripts ya no existen.
-
----
-
-## `cloudrisk_unified.py` — pipeline único streaming (stateful)
-
 Fan-in de los 3 topics Pub/Sub del juego → un único job de Dataflow → dos
 sinks (Firestore para estado *hot* + BigQuery para histórico analítico).
 
