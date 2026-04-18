@@ -1,7 +1,7 @@
 # pipelines/ — Jobs de streaming en Dataflow
 
 Fan-in de los 3 topics Pub/Sub del juego → un único job de Dataflow → dos
-sinks (Firestore para estado *hot* + BigQuery para histórico analítico).
+sinks (Firestore para estado en tiempo real + BigQuery para histórico analítico).
 
 ### Topología
 
@@ -48,12 +48,6 @@ de golpe cuando toca reset diario.
 | `DAILY_ARMY_CAP` | `50` | Máx armies/día por jugador |
 | `DAILY_STEPS_CAP` | `30000` | Máx pasos contables/día (anti-trampa, ≈ maratón) |
 | `MAX_SPEED_KMH` | `15` | Umbral anti-trampa (> 15 km/h = DLQ) |
-
-> Nota: la bonificación **rappel ×1.5 cada 24 h** (presente en un plan
-> anterior) **se retiró** en la auditoría 2026-04-17 — introducía
-> dependencia temporal en el DoFn sin aportar valor de juego. La
-> columna `rappel_applied BOOLEAN` queda en el schema BQ por compatibilidad
-> histórica pero ya no se popula.
 
 ### Esquema BigQuery
 
