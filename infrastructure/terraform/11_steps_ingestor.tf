@@ -8,41 +8,10 @@
 # │        tracker, publica N mensajes al topic player-movements.           │
 # │      → Disparado por Cloud Scheduler a las 03:00 Europe/Madrid.         │
 # │                                                                         │
-# │   2) BigQuery table `player_movements_raw` — histórico crudo de eventos │
-# │      (lo escribía el pipeline anterior; queda para retrocompatibilidad  │
-# │      y queries analíticas sobre el stream sin transformar).             │
-# │                                                                         │
 # │ El antiguo scorer horario se eliminó: toda su lógica se absorbió en el  │
 # │ pipeline Dataflow unificado (pipelines/cloudrisk_unified.py) vía        │
 # │ stateful DoFn. Ya no hay Cloud Run Service ni Cloud Scheduler horario.  │
 # └─────────────────────────────────────────────────────────────────────────┘
-
-# ─── BigQuery: tabla de pasos crudos (lo que escribe la pipeline) ────────────
-resource "google_bigquery_table" "player_movements_raw" {
-  dataset_id = google_bigquery_dataset.cloudrisk.dataset_id
-  table_id   = "player_movements_raw"
-
-  # Particionada por día → queries del último hora escanean 1 partición.
-  time_partitioning {
-    type  = "DAY"
-    field = "ts"
-  }
-  # Clustering para acelerar "dame el jugador X en el último día"
-  clustering = ["player_id", "source"]
-
-  schema = jsonencode([
-    { name = "ts",          type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "player_id",   type = "STRING",    mode = "REQUIRED" },
-    { name = "steps_delta", type = "INT64",     mode = "REQUIRED" },
-    { name = "latitude",    type = "FLOAT64",   mode = "NULLABLE" },
-    { name = "longitude",   type = "FLOAT64",   mode = "NULLABLE" },
-    { name = "speed_mps",   type = "FLOAT64",   mode = "NULLABLE" },
-    { name = "source",      type = "STRING",    mode = "REQUIRED" }, # real|synthetic_walker|backend_sync
-    { name = "ingested_at", type = "TIMESTAMP", mode = "NULLABLE" },
-  ])
-
-  deletion_protection = false   # on purpose, low-risk analytics table
-}
 
 # ─── Service Account dedicada al ingestor ───────────────────────────────────
 resource "google_service_account" "steps_ingestor" {
@@ -154,7 +123,4 @@ output "steps_fetcher_job_name" {
   description = "Run-once-daily Cloud Run Job that ingests random_tracker data"
 }
 
-output "player_movements_raw_table" {
-  value       = "${var.project_id}.${google_bigquery_dataset.cloudrisk.dataset_id}.${google_bigquery_table.player_movements_raw.table_id}"
-  description = "BQ table where Noelia+Martha's Dataflow writes all step events"
-}
+
