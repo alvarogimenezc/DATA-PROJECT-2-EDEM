@@ -2,39 +2,22 @@
 
 > **Camina Valencia. Cada paso es munición. Conquista los 87 barrios.**
 > Proyecto 100 % **serverless** sobre Google Cloud Platform.
->
-> **Case study** del curso *Serverless Data Processing* — misma metodología
-> que el repo del profesor [`jabrio/Serverless_EDEM_2026`](https://github.com/jabrio/Serverless_EDEM_2026).
-
-[![CI](https://github.com/RicardoEdreiraPenas/DTP2-SAFE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/RicardoEdreiraPenas/DTP2-SAFE/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.12-blue)
-![Node](https://img.shields.io/badge/node-20-brightgreen)
-![GCP](https://img.shields.io/badge/cloud-GCP-4285F4)
-![Terraform](https://img.shields.io/badge/iac-terraform-7B42BC)
-
-**Máster Big Data & Cloud · EDEM 2025/2026 · Serverless Computing**
-**Prof. Javi Briones** · [`github.com/jabrio/Serverless_EDEM_2026`](https://github.com/jabrio/Serverless_EDEM_2026)
-**Repo del equipo (destino final):** [`alvarogimenezc/DATA-PROJECT-2-EDEM`](https://github.com/alvarogimenezc/DATA-PROJECT-2-EDEM)
-
----
 
 ## Índice
 
 1. [Qué es CloudRISK](#1-qué-es-cloudrisk)
 2. [Arquitectura serverless](#2-arquitectura-serverless)
-3. [Mapa a los 13 temas del curso](#3-mapa-a-los-13-temas-del-curso)
-4. [Quién hace qué (equipo de 5)](#4-quién-hace-qué-equipo-de-5)
-5. [Arranque rápido en local](#5-arranque-rápido-en-local)
-6. [Despliegue a GCP paso a paso](#6-despliegue-a-gcp-paso-a-paso) ⭐
-7. [Cómo recibimos datos en tiempo real (random_tracker + demo seed)](#7-cómo-recibimos-datos-en-tiempo-real-random_tracker--demo-seed) ⭐⭐
-8. [Terraform: qué hace cada archivo](#8-terraform-qué-hace-cada-archivo)
-9. [Firestore — esquema y contrato](#9-firestore--esquema-y-contrato)
-10. [Backup y restore de Firestore](#10-backup-y-restore-de-firestore)
-11. [Demo accounts + comandos de dev](#11-demo-accounts--comandos-de-dev)
-12. [CI/CD con Cloud Build](#12-cicd-con-cloud-build)
-13. [Fusión con el repo del equipo](#13-fusión-con-el-repo-del-equipo)
-14. [Runbook de incidencias comunes](#14-runbook-de-incidencias-comunes)
-15. [Checklist de entrega](#15-checklist-de-entrega)
+3. [Arranque rápido en local](#5-arranque-rápido-en-local)
+4. [Despliegue a GCP paso a paso](#6-despliegue-a-gcp-paso-a-paso) ⭐
+5. [Cómo recibimos datos en tiempo real (random_tracker + demo seed)](#7-cómo-recibimos-datos-en-tiempo-real-random_tracker--demo-seed) ⭐⭐
+6. [Terraform: qué hace cada archivo](#8-terraform-qué-hace-cada-archivo)
+7. [Firestore — esquema y contrato](#9-firestore--esquema-y-contrato)
+8.  [Backup y restore de Firestore](#10-backup-y-restore-de-firestore)
+9.  [Demo accounts + comandos de dev](#11-demo-accounts--comandos-de-dev)
+10. [CI/CD con Cloud Build](#12-cicd-con-cloud-build)
+11. [Fusión con el repo del equipo](#13-fusión-con-el-repo-del-equipo)
+12. [Runbook de incidencias comunes](#14-runbook-de-incidencias-comunes)
+13. [Checklist de entrega](#15-checklist-de-entrega)
 
 ---
 
@@ -131,24 +114,6 @@ El recorrido completo vive en [`notebooks/00_PROYECTO_COMPLETO.ipynb`](./noteboo
 
 ---
 
-## 4. Quién hace qué (equipo de 5)
-
-Cada miembro tiene **su propio notebook** con el formato `🎯 Lo que haces / 💡 Lo que hace / ✅ Lo que ves` del profesor Javi Briones:
-
-| Miembro | Notebook | Componente | Topics Pub/Sub |
-|---|---|---|---|
-| **Fran** | [`notebooks/01_fran_walker_backend_infra.ipynb`](./notebooks/01_fran_walker_backend_infra.ipynb) | Walker + Backend FastAPI + Infra + CI/CD | `player-movements` |
-| **Álvaro** | [`notebooks/02_alvaro_ingestion.ipynb`](./notebooks/02_alvaro_ingestion.ipynb) | Air + Weather ingestors | `air-quality`, `weather` |
-| **Noelia + Martha** | [`notebooks/03_noelia_martha_pipeline.ipynb`](./notebooks/03_noelia_martha_pipeline.ipynb) | Dataflow / Apache Beam | *(consume los 3)* |
-| **Ricardo** | [`notebooks/04_ricardo_frontend.ipynb`](./notebooks/04_ricardo_frontend.ipynb) | Frontend React + MapLibre | *(cliente HTTP)* |
-
-**Master para todos:** [`notebooks/00_PROYECTO_COMPLETO.ipynb`](./notebooks/00_PROYECTO_COMPLETO.ipynb)
-**Adaptación al repo del equipo (6 PRs):** [`notebooks/05_adaptar_al_equipo.ipynb`](./notebooks/05_adaptar_al_equipo.ipynb)
-**Anatomía línea-a-línea del proyecto:** [`notebooks/06_ANATOMIA_DEL_PROYECTO.ipynb`](./notebooks/06_ANATOMIA_DEL_PROYECTO.ipynb) ⭐
-**Cómo correr los notebooks:** [`notebooks/SETUP_JUPYTER.md`](./notebooks/SETUP_JUPYTER.md)
-
----
-
 ## 5. Arranque rápido en local
 
 ### Requisitos
@@ -158,7 +123,7 @@ Cada miembro tiene **su propio notebook** con el formato `🎯 Lo que haces / �
 - Docker Desktop (opcional pero recomendado)
 - `gcloud` CLI ([install](https://cloud.google.com/sdk/docs/install))
 
-### Opción A — Docker Compose (1 comando, todo arriba)
+### Docker Compose (1 comando, todo arriba)
 
 ```bash
 git clone https://github.com/RicardoEdreiraPenas/DTP2-SAFE.git
@@ -169,30 +134,6 @@ docker compose up --build
 
 - Frontend (incluye `/analytics`) → http://localhost:3000
 - API docs → http://localhost:8080/api/v1/docs
-
-### Opción B — Sin Docker (dev local, 3 terminales)
-
-```bash
-# Terminal 1 — Backend con store en memoria
-cd backend
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-USE_LOCAL_STORE=1 SECRET_KEY=dev python -m uvicorn cloudrisk_api.main:app --port 8080
-```
-
-```bash
-# Terminal 2 — Frontend
-cd frontend
-npm ci
-npm run dev                    # http://localhost:3000
-```
-
-```bash
-# Terminal 3 — Simulador de partida (opcional)
-python data_generator/bot_ia_riesgo.py --interval 5
-```
-
----
 
 ## 6. Despliegue a GCP paso a paso
 
