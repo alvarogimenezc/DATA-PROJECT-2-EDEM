@@ -76,14 +76,3 @@ Cada módulo de `database/` funciona con **Firestore** en producción o con un *
 | **Local (RAM)** | `USE_LOCAL_STORE=1` | En memoria, se reinicia cada vez. Siembra 87 zonas + 4 jugadores demo. |
 | **Emulador Firestore** | `FIRESTORE_EMULATOR_HOST=localhost:8200` | Persiste mientras el contenedor esté vivo. |
 | **GCP producción** | `PROJECT_ID=cloudrisk-492619` + credenciales | Firestore + Pub/Sub + BigQuery reales. |
-
----
-
-## Tests
-
-```bash
-cd backend
-pytest
-```
-
-12 ficheros de test bajo `tests/`, todos corren contra el almacén en memoria (sin necesitar GCP). Cubren: usuarios, clanes, zonas, ejércitos, turnos, pasos, misiones, multiplicadores y salud.
