@@ -244,3 +244,129 @@ Si lo quieres cambiar o entender mejor está en [infrastructure/deploy.sh](infra
 ---
 
 ## 8. Resultados, aprendizajes y mejoras
+
+### 8.1 — Auto-setup de partida al arrancar el backend
+
+Antes, cada vez que un compañero clonaba el repo y levantaba el backend,
+Firestore estaba vacío y el frontend mostraba 0 zonas. Ahora el arranque de
+la API llama a `/setup/run` internamente — 15 zonas × 4 jugadores con
+`defense_level=2` y pool vacío. Así el HUD del mapa ya pinta algo a la
+primera, sin tocar ningún botón.
+
+**Aprendizaje**: los defaults "cero" son hostiles para una demo. Si el
+estado inicial del sistema no tiene sentido visual, el primero que abre la
+app piensa que está roto.
+
+### 8.2 — Bots que juegan "como un humano" (v3.3)
+
+El bot original era tonto — elegía cualquier zona random, ignoraba si era
+adyacente y no pagaba pool. Con 3 bots jugando simultáneamente el usuario
+perdía la partida sin ver nada interesante.
+
+Qué cambió en [simulador.py](backend/cloudrisk_api/endpoints/simulador.py):
+
+- **Priorizan al líder**: `_get_leader()` devuelve el jugador con más
+  zonas. El bot intenta atacarle primero — así la partida se autoequilibra
+  en vez de ir todos contra el usuario.
+- **Adyacencia real**: `neighbors_of(zone_id)` filtra sólo zonas tocables.
+  Antes el bot "teletransportaba" tropas.
+- **Pagan su pool igual que yo**: 2 `power_points` por conquista, 1 por
+  fortificar, debitados vía `usuarios_repo.update_user`. Si el pool está a
+  0, el bot hace `idle`.
+- **Reciben `_grant_turn_bonus` al terminar su turno**: mismo bonus que el
+  humano (`max(3, zones//3)`). Antes sólo se lo daba al usuario y los
+  bots quedaban descapitalizados a los 2-3 turnos.
+- **Atacar gasta defensa de la zona origen**: `defense_level -= 1` tras
+  atacar. Evita que un bot con 1 zona potente conquiste media ciudad sin
+  mermarse.
+
+**Aprendizaje**: "bot inteligente" en un juego multijugador no es que juegue
+bien — es que juegue creíble. Si el bot no sigue las mismas reglas que el
+humano, la partida se siente rota aunque técnicamente funcione.
+
+### 8.3 — `/simulate_bots/run` con `mode="step"`
+
+El endpoint original ejecutaba los 3 turnos de bot en una sola llamada HTTP.
+El `TurnBanner` del frontend no alcanzaba a pintar "Turno de Sur" antes de
+que ya hubiera pasado al siguiente. Añadimos `mode: Literal["loop","step"]`
+con default `"loop"` (retrocompat total) — en `step` el backend ejecuta UN
+solo turno de bot y devuelve. El frontend controla la cadencia.
+
+**Aprendizaje**: si quieres feedback visual en un proceso iterativo, el
+servidor tiene que devolver control entre iteraciones. La alternativa (SSE,
+websockets) era overkill para 3 turnos.
+
+### 8.4 — Botón "Jugar turnos de bots" en el HUD del mapa
+
+Estaba en el Dashboard (lobby), pero la partida pasa en el `MapView`. Lo
+movimos al HUD, al lado de "Terminar turno". El componente `SimulateBotsButton`
+tiene su propio polling de `/turn/` cada 3s (patrón ya usado por
+`TurnBanner` y `EndTurnButton`) — no tocamos el prop drilling del padre.
+
+**Aprendizaje**: 3 componentes polleando el mismo endpoint es "más feo" en
+teoría pero mantiene los componentes independientes y el prop drilling
+limpio. Elevar a un `useTurn()` compartido lo dejamos para cuando duela.
+
+### 8.5 — Cadencia lenta (4.5s/paso) + resumen por bot
+
+El botón recorre 3 bots con `await sleep(4500)` entre pasos — total ≈ 14s.
+Durante la pausa el botón muestra `✓ Sur: +2 zonas, +1 fort (1/3)` —
+resumen de lo que acaba de hacer ese bot. Al cambiar de bot pinta
+`Jugando Este… (2/3)` y repite.
+
+**Bug que aprendimos a no cometer**: la condición inicial era
+`lastSummary.bot !== currentBot` — lo contrario de lo que queríamos. El
+resumen se veía 500ms en la transición y la pausa de 4.5s mostraba
+"Jugando X…" — totalmente inútil. Fix en [commit e0c5071](frontend/src/pages/UrbanPacer.jsx).
+
+**Aprendizaje**: al escribir labels de UI con estados derivados, dibujar
+el timeline en papel antes de codear. Los `!==` invertidos son el bug más
+estúpido y más caro de diagnosticar en caliente.
+
+### 8.6 — Modal de ataque con info real de la zona
+
+El `ActionPanel` con `kind="attack"` mostraba 3 pills con el balance del
+ATACANTE (`Disponibles/Hoy/Total`). Tras el auto-setup el pool está a 0 y
+se veía `0/0/0` — parecía un bug de la zona objetivo. Sustituido por:
+
+- **DEFENSA** — `zone.total_armies ?? zone.defense_level` en rojo.
+- **PROPIETARIO** — nombre del clan rival con su color.
+- **MIS ADY.** — conteo de mis zonas adyacentes con `defense_level >= 2`.
+  Si es 0 → banner amarillo + botón disabled ("Conquista primero un
+  barrio vecino").
+
+**Aprendizaje**: un modal de acción debe mostrar info del objetivo, no del
+actor. Y la validación debe ser pre-click (banner) además de post-click
+(red de seguridad del backend) — si el usuario sólo se entera del error
+tras pulsar, la UX se siente rota.
+
+### 8.7 — Gotcha de Terraform: cambios en código Python no redeployan
+
+[13_docker_builds.tf](infrastructure/terraform/13_docker_builds.tf) dispara
+`docker build` con `triggers = { dockerfile, requirements }`. Si tocas
+`simulador.py` o `UrbanPacer.jsx` y haces `terraform apply`, Terraform dice
+`No changes` y Cloud Run sigue sirviendo la imagen vieja.
+
+Para forzar rebuild tras cambios sólo de código:
+```
+cd infrastructure/terraform
+terraform apply -replace=null_resource.image_api -replace=null_resource.image_frontend
+```
+
+**Aprendizaje**: `filemd5()` sobre Dockerfile/requirements es barato y
+evita rebuilds innecesarios, pero introduce un paso manual cuando cambias
+sólo código fuente. Alternativa futura: un trigger que haga hash recursivo
+de `backend/**/*.py`, aunque relentiza cada `plan`.
+
+### 8.8 — Flujo de trabajo: worktree + main local, sin push
+
+Durante toda esta fase trabajamos sobre un worktree
+(`.claude/worktrees/stoic-jepsen-070830`) con rama `claude/stoic-jepsen-070830`
+y fusionamos a `main` local. No hacemos `git push` — el push lo hace el
+usuario cuando quiere. Al fusionar `origin/main` en local (commit
+`a4fe46d`) sin conflictos, confirmamos que el worktree no divergió.
+
+**Aprendizaje**: worktrees separan el trabajo en curso de la rama principal
+sin clonar el repo dos veces. Combinado con "commit local, push manual",
+das margen al humano a revisar antes de publicar.
+
