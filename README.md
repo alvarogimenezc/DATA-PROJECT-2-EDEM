@@ -116,34 +116,60 @@ python data_generator/juego_caminante.py --moves 50 --pause 0.5
 
 ## 7. Despliegue a GCP
 
-Fran explica que es esto y como funciona, con sus palabras. Solo explicamos 1 forma de arrancar, la mas sencilla:
- 
-*5.1 — Preparar la máquina (una vez)*
+El despliegue tiene **dependencias reales** (el registry tiene que existir antes de pushear imágenes; las imágenes tienen que existir antes de que Cloud Run las arranque; el flex template de Dataflow tiene que estar subido antes de lanzar el job). Por eso lo partimos en **5 fases**, una por comando, en [infrastructure/deploy.sh](infrastructure/deploy.sh). Si una falla, la arreglas y la reejecutas sin tocar las anteriores.
+
+### 7.0 — Una sola vez por máquina
+Loguearte en GCP. Los secretos de API se generan solos; no hay nada que rellenar a mano.
+```bash
 gcloud auth login
 gcloud auth application-default login
-gcloud config set project cloudrisk-492619
+```
 
+### 7.1 — Fase 1: bootstrap
+Habilita las APIs que usamos, crea el bucket de GCS donde vivirá el `tfstate` (versioned, por si algún día hay que hacer rollback) y corre `terraform init` apuntando a ese bucket.
+```bash
+bash infrastructure/deploy.sh bootstrap cloudrisk-492619
+```
 
-*5.2 — Bucket para el state de Terraform (una vez)*
-gsutil mb -l europe-west1 gs://cloudrisk-492619-tfstate
-gsutil versioning set on gs://cloudrisk-492619-tfstate
+### 7.2 — Fase 2: base
+`terraform apply` **parcial** (con `-target`) que crea solo 3 cosas: el Artifact Registry `cloudrisk`, los 3 secretos (JWT, scheduler, OpenWeather) y el bucket GCS de Dataflow. Hace falta separarlo de la fase 5 porque no podemos pushear imágenes a un registry que no existe todavía.
+```bash
+bash infrastructure/deploy.sh base cloudrisk-492619
+```
 
+### 7.3 — Fase 3: imágenes
+Build + push de las 6 imágenes Docker a Artifact Registry: `api`, `frontend`, `air-ingestor`, `weather-ingestor`, `walker`, `steps-ingestor`. Necesitas Docker corriendo localmente.
+```bash
+bash infrastructure/deploy.sh images cloudrisk-492619
+```
 
-*5.3 — Rellenar terraform.tfvars*
-cd infrastructure/terraform
-cp terraform.tfvars.example terraform.tfvars
+### 7.4 — Fase 4: Dataflow flex template
+`gcloud dataflow flex-template build` empaqueta [pipelines/cloudrisk_unified.py](pipelines/cloudrisk_unified.py), lo buildea como imagen Docker y sube un manifiesto JSON al bucket de Dataflow. Sin esto, el job Dataflow no puede arrancar en la fase 5.
+```bash
+bash infrastructure/deploy.sh flex cloudrisk-492619
+```
 
+### 7.5 — Fase 5: apply completo
+`terraform apply` completo. Con las imágenes y el flex template ya subidos, Terraform levanta los Cloud Run services (`cloudrisk-api`, `cloudrisk-web`, `air-ingestor`, `weather-ingestor`), los Jobs (`walker`, `steps-fetcher`, `demo-seed`), los crons de Cloud Scheduler y el job de Dataflow. Al acabar imprime las URLs públicas.
+```bash
+bash infrastructure/deploy.sh apply cloudrisk-492619
+```
 
-*Generar secretos fuertes (cross-platform)*
-python -c "import secrets; print('jwt_secret =', repr(secrets.token_hex(32)))"
-python -c "import secrets; print('scheduler_secret =', repr(secrets.token_hex(32)))"
-Pega ambos en terraform.tfvars
+### 7.6 — Un paso manual que NO puede automatizarse
+La key de OpenWeatherMap requiere registro humano en su web. Hasta que no la metas, los ingestors `air-ingestor` y `weather-ingestor` no leen datos reales (arrancan pero fallan en cada llamada a la API):
+```bash
+echo -n 'TU_OPENWEATHER_KEY' | gcloud secrets versions add openweather-api-key --data-file=-
+```
+Cloud Run la recoge automáticamente (lee `version = "latest"`).
 
-*5.4 — terraform apply*
-terraform init
-terraform plan
-terraform apply
-Esto crea:
+### Qué crea el despliegue
+Detalle en [infrastructure/README.md](infrastructure/README.md). Resumen:
+- **Firestore** (Native, `eur3`, PITR de 7 días) — [03_firestore.tf](infrastructure/terraform/03_firestore.tf)
+- **Pub/Sub** (3 topics + DLQs) — [02_pubsub.tf](infrastructure/terraform/02_pubsub.tf)
+- **BigQuery** (dataset `cloudrisk`, 3 tablas) — [04_bigquery.tf](infrastructure/terraform/04_bigquery.tf)
+- **Cloud Run** (2 services + 1 job para backend/frontend + ingestors) — [08_cloud_run.tf](infrastructure/terraform/08_cloud_run.tf)
+- **Dataflow** (pipeline unificado stateful) — [12_dataflow.tf](infrastructure/terraform/12_dataflow.tf)
+- **Scheduler** (crons de decay y batallas) — [09_scheduler.tf](infrastructure/terraform/09_scheduler.tf)
 
 ---
 
