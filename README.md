@@ -59,15 +59,79 @@ Explicar las 4 tablas, para que sirve cada una, estructura de datos. Por que esc
 
 Fran explica que es esto y como funciona, con sus palabras. Solo explicamos 1 forma de arrancar, la mas sencilla:
 
-cp .env.example .env
-docker compose up --build
+---
 
-Frontend (incl. /analytics) → http://localhost:3000
-API + Swagger → http://localhost:8080/api/v1/docs
-Firestore emulator → localhost:8200
-Pub/Sub emulator → localhost:8085
+### ¿Qué es el arranque en local?
+
+El arranque en local es cuando nosotros levantamos el proyecto que llamamos "CloudRisk" sin tocar ninguna opcion de Google Cloud Platform, en este caso en vez de conectarnos a FireStore o Pub/Sub reales, lo hacemos en emuladores oficiales de Google dentro de nuestros contenedores de Docker.
+
+¿Por que? ... Porque asi cualquierra del equipo puede arrancar el proyecto sin la necesidad de tener un cuenta de google cloud, ni configurar nada, ni pagar nada.
 
 ---
+
+## ¿De donde sale cada cosa que tenemos en local?
+
+### 🔹 Frontend
+
+- Servicio de frontend sale del puerto **3000** que es el puerto que tenemos configurado en el docker compose para el servicio de frontend
+
+#### ¿Cómo se construyó y qué tecnologías se usaron?
+
+React + Vite, el framework que hemos escogido para el desarrollo del frontend de CloudRisk. Es un framework de desarrollo web que nos permite crear aplicaciones web de manera rápida y sencilla, con una gran cantidad de funcionalidades y herramientas integradas. Vite es un framework de desarrollo web moderno que se basa en la idea de "desarrollo rápido", lo que significa que nos permite desarrollar aplicaciones web de manera rápida y eficiente, sin tener que preocuparnos por la configuración y el rendimiento.
+
+#### ¿Qué hay aquí?
+
+- (Mapa, login, /analytics)
+
+---
+
+### 🔹 API
+
+- Servicio de API sale del puerto **8080** que es el puerto que tenemos configurado en el docker compose para el servicio de API
+
+#### ¿Con qué tecnologías se construyó?
+
+El servicio de API de CloudRisk se construyó utilizando Python y FastAPI. FastAPI es un framework web moderno y rápido para construir APIs con Python. Es fácil de usar, tiene una gran cantidad de funcionalidades integradas y es muy eficiente en términos de rendimiento. Además, FastAPI es compatible con OpenAPI, lo que nos permite generar documentación automática para nuestra API.
+
+#### ¿Qué hay aquí?
+
+- (Endpoints para el login, el estado del mapa, y el endpoint de analytics)
+
+---
+
+### 🔹 Firestore Emulator
+
+- Firestore emulator sale del puerto **8200** que es el puerto que tenemos configurado en el docker compose para el servicio de Firestore emulator
+
+Base de datos en tiempo real (FALSA) que nos permite hacer? Nos permite almacenar y sincronizar datos entre los clientes y el servidor en tiempo real. En nuestro caso, lo usamos para almacenar el estado del juego, las tropas desplegadas, los movimientos de los jugadores, etc. Es una base de datos NoSQL que nos permite trabajar con documentos y colecciones, lo que nos da mucha flexibilidad a la hora de modelar nuestros datos.
+
+---
+
+### 🔹 Pub/Sub Emulator
+
+- Pub/Sub emulator sale del puerto **8085** que es el puerto que tenemos configurado en el docker compose para el servicio de Pub/Sub emulator
+
+Sistema de mensajería en tiempo real (FALSO) que nos permite enviar y recibir mensajes entre diferentes partes de nuestra aplicación. En nuestro caso, lo usamos para enviar los pasos que da cada jugador desde el frontend al backend, y para enviar los multiplicadores desde el backend al frontend. Es un sistema de mensajería basado en el modelo de publicación-suscripción, lo que significa que los productores de mensajes (publicadores) envían mensajes a un tema, y los consumidores de mensajes (suscriptores) reciben mensajes de ese tema o topic.
+
+---
+
+## Desplegar en local
+
+1. Crear un `.env`  
+2. Ejecutar:
+
+```bash
+docker compose up -d -- build
+```
+
+### Servicios disponibles
+
+- **Frontend (incl. /analytics)** → http://localhost:3000  
+- **API + Swagger** → http://localhost:8080/api/v1/docs  
+- **Firestore emulator** → localhost:8200  
+- **Pub/Sub emulator** → localhost:8085  
+- **Dataflow** → localhost:8080 (endpoint de Dataflow en local)
+
 
 ## 7. Despliegue a GCP
 
