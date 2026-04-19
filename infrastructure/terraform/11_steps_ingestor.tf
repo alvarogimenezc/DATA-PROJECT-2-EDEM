@@ -86,6 +86,7 @@ resource "google_cloud_run_v2_job" "steps_fetcher" {
   depends_on = [
     google_project_service.apis,
     google_pubsub_topic_iam_member.ingestor_pubsub_publisher,
+    null_resource.image_steps_ingestor,
   ]
 }
 
