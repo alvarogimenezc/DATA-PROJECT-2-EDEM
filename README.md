@@ -33,7 +33,19 @@ permanentemente (salvo el job de Dataflow, que por diseño mantiene estado).
 
 ## 2. Arquitectura
 
-Insertamos la imagen resumen dearquitectura - lo hace Álvaro a partir del miro
+La arquitectura seleccionada para la resolución del reto es la siguiente: 
+
+![Texto alternativo](DataProject2.jpg)
+
+Como vemos, se trata de una arquitectura que respeta la filosofía habitual de proyectos de big data : ingesta - transformación - almacenamiento - visualización. 
+
+En nuestro caso, tenemos una ingesta de datos de geolocalización de usuarios, factor de calidad ambiental y calidad del aire. Estos datos entran a dataflow donde se aplica la lógica de negocio y como resultado se insertan los ejercitos equivalentes ganados por el usuario tanto en firestore como en BigQuery. 
+
+Firestore alberga las tablas de estados, en el tenemos la tabla de user_balance y location_balance, que se actualizan conforme avanza la partida con los ejercitos disponibles por usuario y las zonas del mapa con los ejercitos y usuario que las controla. 
+
+La base de datos de BigQuery nos sirve para almacenar datos históricos para métricas y analisis más profundos. 
+
+Por último, el frontend se conecta a la tablas mediante un servidor de FastAPI que sirve como puerta de acceso a las bases de datos. Además, las acciones de los usuarios que puedan hacer en la aplicación también interactuan con las bases de datos mediante este servidor de entrada. 
 
 ---
 
