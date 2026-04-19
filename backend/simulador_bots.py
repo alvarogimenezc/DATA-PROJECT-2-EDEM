@@ -1,16 +1,28 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║              CloudRISK — BOT SIMULATION / STRESS TEST                     ║
+║              CloudRISK — BOT SIMULATION / STRESS TEST                        ║
 ║                                                                              ║
-║  4 bots compete simultaneously in the real game engine (in-memory store).   ║
-║  All interactions go through the actual FastAPI routers, using an            ║
-║  httpx.AsyncClient with ASGITransport — no mocks, no shortcuts.              ║
+║  4 bots compiten simultáneamente contra el motor del juego. Los bots hablan  ║
+║  con la API real vía httpx.AsyncClient — no hay mocks ni atajos.             ║
 ║                                                                              ║
-║  Run:  USE_LOCAL_STORE=1 python simulador_bots.py                            ║
+║  Dos modos:                                                                  ║
+║                                                                              ║
+║  1) LOCAL (default, rápido) — corre contra el backend in-memory usando       ║
+║     httpx.ASGITransport. No necesitas Docker, no toca Firestore real.        ║
+║                                                                              ║
+║       USE_LOCAL_STORE=1 python simulador_bots.py                             ║
+║                                                                              ║
+║  2) CLOUD — apunta a un backend desplegado (Cloud Run). Crea usuarios        ║
+║     reales en Firestore (con sufijo único por ejecución para no colisionar). ║
+║                                                                              ║
+║       python simulador_bots.py --url https://cloudrisk-api-xxx.run.app       ║
+║                                                                              ║
+║  Si algún stress test falla, el script termina con exit code 1 — útil para   ║
+║  smoke-tests en CI.                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-Bot strategies
-──────────────
+Estrategias de los bots
+───────────────────────
   CONQUISTADOR  — Greedy zone taker. Rushes free zones, then attacks weakly
                   defended enemy territory.
   INVASOR       — Pure aggressor. Targets zones owned by rival clans.
@@ -20,31 +32,25 @@ Bot strategies
   DEFENSOR      — Fortifier. Conquers and holds a small number of key zones,
                   resolves battles that are initiated against it.
 
-Stress-test scenarios (run after individual bot rounds)
-────────────────────────────────────────────────────────
-  S1 — All 4 bots race to conquer the same free zone simultaneously.
-  S2 — Two bots attack the same enemy zone at the same time (only one should succeed).
-  S3 — A bot that is NOT a battle participant tries to resolve that battle (403 expected).
+Escenarios de stress
+────────────────────
+  S1 — All 4 bots race to conquer the same free zone simultaneously (esperado: 1 ganador).
+  S2 — Two bots attack the same enemy zone at the same time (esperado: exactamente 1 batalla creada).
+  S3 — A bot that is NOT a battle participant tries to resolve that battle (esperado: 403).
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
 import random
 import sys
 import time
-from datetime import datetime
-from typing import Optional
-
-# ── Force in-memory store before any import that checks the env var ──────────
-os.environ.setdefault("USE_LOCAL_STORE", "1")
+from datetime import datetime, timezone
 
 import httpx
 from httpx import AsyncClient
-
-# ── Now safe to import the app ───────────────────────────────────────────────
-from cloudrisk_api.main import app   # noqa: E402  (import after env set)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Logging helpers
@@ -63,6 +69,29 @@ COLORS = {
 
 _log_lock = asyncio.Lock()
 
+# Multiplicador global de sleeps. Se configura en main() via --speed.
+#   slow  = x20 (partida de ~10 min, el ojo humano sigue cada acción)
+#   normal = x1 (smoke test rápido, ~1 min)
+#   fast   = x0.3 (para CI, todavía más rápido)
+_SPEED_FACTOR = 1.0
+
+_SPEED_TABLE = {"slow": 20.0, "normal": 1.0, "fast": 0.3}
+
+
+def _configure_speed(mode: str) -> None:
+    global _SPEED_FACTOR
+    _SPEED_FACTOR = _SPEED_TABLE[mode]
+
+
+async def _sleep(seconds: float) -> None:
+    """Sleep que respeta _SPEED_FACTOR. Usado en lugar de asyncio.sleep
+    en todas las rutinas de bot para que --speed slow alargue la partida."""
+    await asyncio.sleep(seconds * _SPEED_FACTOR)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
 
 async def log(bot_name: str, msg: str, level: str = "info") -> None:
     prefix = {
@@ -75,7 +104,7 @@ async def log(bot_name: str, msg: str, level: str = "info") -> None:
         "step":    "👟 ",
         "stress":  "💥 ",
     }.get(level, "   ")
-    ts = datetime.utcnow().strftime("%H:%M:%S.%f")[:-3]
+    ts = _now().strftime("%H:%M:%S.%f")[:-3]
     color = COLORS.get(bot_name, COLORS["SYSTEM"])
     async with _log_lock:
         print(f"{COLORS['SYSTEM']}[{ts}]{RESET} {color}{BOLD}[{bot_name:12s}]{RESET} {prefix}{msg}")
@@ -91,7 +120,7 @@ _combat_log_lock = asyncio.Lock()
 
 async def record(event_type: str, actor: str, detail: dict) -> None:
     entry = {
-        "ts": datetime.utcnow().isoformat(),
+        "ts": _now().isoformat(),
         "event": event_type,
         "actor": actor,
         **detail,
@@ -121,9 +150,9 @@ class Bot:
         self.client = client
 
         # filled after registration
-        self.user_id: Optional[str] = None
-        self.clan_id: Optional[str] = None
-        self.token: Optional[str] = None
+        self.user_id: str | None = None
+        self.clan_id: str | None = None
+        self.token: str | None = None
 
     # ── HTTP helpers ─────────────────────────────────────────────────────────
 
@@ -185,7 +214,7 @@ class Bot:
     async def conquer_zone(self, zone: dict) -> bool:
         r = await self.post(f"/api/v1/zones/{zone['id']}/conquer")
         if r.status_code == 200:
-            await log(self.name, f"Conquered '{zone['name']}' (def={zone.get('defense_level',0)})", "conquer")
+            await log(self.name, f"Conquered '{zone['name']}' (def={zone.get('defense_level', 0)})", "conquer")
             await record("conquer", self.name, {
                 "zone_id": zone["id"], "zone_name": zone["name"],
                 "clan_id": self.clan_id,
@@ -256,7 +285,6 @@ async def run_conquistador(bot: Bot, rounds: int = 4) -> None:
     """Greedy: take free zones, then attack weak enemy zones."""
     await log(bot.name, "Strategy: CONQUISTADOR — rush free zones, then attack weak ones")
 
-    # Build power first
     await bot.sync_steps(500)
 
     for rnd in range(rounds):
@@ -264,13 +292,11 @@ async def run_conquistador(bot: Bot, rounds: int = 4) -> None:
         zones = await bot.list_zones()
         random.shuffle(zones)
 
-        # Priority 1: free zones
         free = [z for z in zones if not z.get("owner_clan_id")]
         if free:
             await bot.conquer_zone(free[0])
-            await asyncio.sleep(0.1)
+            await _sleep(0.1)
 
-        # Priority 2: enemy zones with defense_level == 0
         enemy = [
             z for z in zones
             if z.get("owner_clan_id") and z["owner_clan_id"] != bot.clan_id
@@ -280,10 +306,10 @@ async def run_conquistador(bot: Bot, rounds: int = 4) -> None:
             target = enemy[0]
             battle = await bot.initiate_battle(target)
             if battle:
-                await asyncio.sleep(0.2)
+                await _sleep(0.2)
                 await bot.resolve_battle(battle)
 
-        await asyncio.sleep(0.3)
+        await _sleep(0.3)
 
 
 async def run_invasor(bot: Bot, rounds: int = 4) -> None:
@@ -301,44 +327,39 @@ async def run_invasor(bot: Bot, rounds: int = 4) -> None:
             if z.get("owner_clan_id") and z["owner_clan_id"] != bot.clan_id
         ]
         if not enemy:
-            # No enemy zones yet — conquer a free one to have something
             free = [z for z in zones if not z.get("owner_clan_id")]
             if free:
                 await bot.conquer_zone(random.choice(free))
         else:
-            # Attack the easiest target
             target = min(enemy, key=lambda z: z.get("defense_level", 0))
             battle = await bot.initiate_battle(target)
             if battle:
-                await asyncio.sleep(0.15)
+                await _sleep(0.15)
                 await bot.resolve_battle(battle)
 
-        await asyncio.sleep(0.3)
+        await _sleep(0.3)
 
 
 async def run_corredor(bot: Bot, rounds: int = 4) -> None:
     """Runner: max steps → max power → conquer everything."""
     await log(bot.name, "Strategy: CORREDOR — generate massive power, then dominate")
 
-    # Big step sync first
     for _ in range(3):
         steps = random.randint(2000, 5000)
         await bot.sync_steps(steps)
-        await asyncio.sleep(0.05)
+        await _sleep(0.05)
 
     for rnd in range(rounds):
         await log(bot.name, f"— Round {rnd + 1}/{rounds} —")
         zones = await bot.list_zones()
         random.shuffle(zones)
 
-        # Take anything free
         for zone in zones:
             if not zone.get("owner_clan_id"):
                 await bot.conquer_zone(zone)
-                await asyncio.sleep(0.05)
+                await _sleep(0.05)
                 break
 
-        # Also attack with power advantage
         me = await bot.get_me()
         my_power = me.get("power_points", 0)
         enemy = [
@@ -349,10 +370,10 @@ async def run_corredor(bot: Bot, rounds: int = 4) -> None:
             target = random.choice(enemy)
             battle = await bot.initiate_battle(target)
             if battle:
-                await asyncio.sleep(0.2)
+                await _sleep(0.2)
                 await bot.resolve_battle(battle)
 
-        await asyncio.sleep(0.3)
+        await _sleep(0.3)
 
 
 async def run_defensor(bot: Bot, rounds: int = 4) -> None:
@@ -365,7 +386,6 @@ async def run_defensor(bot: Bot, rounds: int = 4) -> None:
         await log(bot.name, f"— Round {rnd + 1}/{rounds} —")
         zones = await bot.list_zones()
 
-        # Conquer high-value free zones (value >= 6)
         premium_free = [
             z for z in zones
             if not z.get("owner_clan_id") and z.get("value", 0) >= 6
@@ -373,7 +393,6 @@ async def run_defensor(bot: Bot, rounds: int = 4) -> None:
         if premium_free:
             await bot.conquer_zone(random.choice(premium_free))
 
-        # Check for ongoing battles on own zones — resolve as defender
         r = await bot.get("/api/v1/battles/")
         if r.status_code == 200:
             ongoing = r.json()
@@ -382,24 +401,25 @@ async def run_defensor(bot: Bot, rounds: int = 4) -> None:
             for battle in my_battles[:2]:
                 await log(bot.name, f"Defending battle {battle['id'][:8]}… on zone {battle['zone_id']}")
                 await bot.resolve_battle(battle)
-                await asyncio.sleep(0.1)
+                await _sleep(0.1)
 
-        await asyncio.sleep(0.3)
+        await _sleep(0.3)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Stress test scenarios
+#  Stress test scenarios — devuelven True si la propiedad se cumple
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def stress_s1_race_to_conquer(bots: list[Bot]) -> None:
-    """S1 — All 4 bots try to conquer the SAME free zone simultaneously."""
+async def stress_s1_race_to_conquer(bots: list[Bot]) -> bool:
+    """S1 — All 4 bots try to conquer the SAME free zone simultaneously.
+       Propiedad: exactamente 1 debe ganar."""
     await log("STRESS", "S1: All bots race to conquer the same free zone at the same moment", "stress")
 
     zones = await bots[0].list_zones()
     free = [z for z in zones if not z.get("owner_clan_id")]
     if not free:
         await log("STRESS", "S1 skipped — no free zones available", "warn")
-        return
+        return True  # skip no es fallo
 
     target = free[0]
     await log("STRESS", f"Target zone: '{target['name']}' ({target['id']})", "stress")
@@ -412,13 +432,20 @@ async def stress_s1_race_to_conquer(bots: list[Bot]) -> None:
     await log("STRESS", f"S1 result: conquer succeeded for → {winners or 'nobody'}", "stress")
     await record("stress_s1", "SYSTEM", {"target_zone": target["id"], "winners": winners})
 
+    passed = len(winners) == 1
+    if passed:
+        await log("STRESS", "S1 PASSED — exactly 1 winner", "ok")
+    else:
+        await log("STRESS", f"S1 FAILED — expected 1 winner, got {len(winners)}", "error")
+    return passed
 
-async def stress_s2_simultaneous_attacks(bots: list[Bot]) -> None:
-    """S2 — Two bots attack the same enemy zone at the same time."""
+
+async def stress_s2_simultaneous_attacks(bots: list[Bot]) -> bool:
+    """S2 — Two bots attack the same enemy zone at the same time.
+       Propiedad: solo 1 batalla debe crearse (el otro recibe 'already ongoing')."""
     await log("STRESS", "S2: Two bots attack the SAME zone simultaneously", "stress")
 
     zones = await bots[0].list_zones()
-    # Find a zone owned by someone other than the last two bots
     attacker_a, attacker_b = bots[2], bots[3]
     target_zones = [
         z for z in zones
@@ -427,7 +454,7 @@ async def stress_s2_simultaneous_attacks(bots: list[Bot]) -> None:
     ]
     if not target_zones:
         await log("STRESS", "S2 skipped — no suitable enemy zone found", "warn")
-        return
+        return True
 
     target = random.choice(target_zones)
     await log("STRESS", f"Both {attacker_a.name} and {attacker_b.name} attack '{target['name']}'", "stress")
@@ -437,63 +464,72 @@ async def stress_s2_simultaneous_attacks(bots: list[Bot]) -> None:
         attacker_b.initiate_battle(target),
         return_exceptions=True,
     )
-    succeeded = sum(1 for b in battles if isinstance(b, dict) and b is not None)
+    succeeded = sum(1 for b in battles if isinstance(b, dict))
     await log(
         "STRESS",
-        f"S2 result: {succeeded}/2 battles created (expected exactly 1 — the rest get 'already ongoing')",
+        f"S2 result: {succeeded}/2 battles created",
         "stress",
     )
     await record("stress_s2", "SYSTEM", {
         "target_zone": target["id"], "battles_created": succeeded
     })
 
-    # Resolve whichever battle was created
+    # Resuelve la batalla creada (limpieza)
     for b in battles:
-        if isinstance(b, dict) and b is not None:
+        if isinstance(b, dict):
             actor = attacker_a if attacker_a.clan_id == b.get("attacker_clan_id") else attacker_b
-            await asyncio.sleep(0.1)
+            await _sleep(0.1)
             await actor.resolve_battle(b)
 
+    passed = succeeded == 1
+    if passed:
+        await log("STRESS", "S2 PASSED — exactly 1 battle created", "ok")
+    else:
+        await log("STRESS", f"S2 FAILED — expected 1 battle, got {succeeded}", "error")
+    return passed
 
-async def stress_s3_unauthorized_resolve(bots: list[Bot]) -> None:
-    """S3 — Bot that is NOT a participant tries to resolve a battle (403 expected)."""
+
+async def stress_s3_unauthorized_resolve(bots: list[Bot]) -> bool:
+    """S3 — Bot that is NOT a participant tries to resolve a battle (403 expected).
+       Propiedad: el outsider NO debe poder resolver."""
     await log("STRESS", "S3: Non-participant bot tries to resolve a battle (403 expected)", "stress")
 
-    # Bot 0 attacks a zone owned by Bot 1
     zones = await bots[0].list_zones()
     bot1_zones = [z for z in zones if z.get("owner_clan_id") == bots[1].clan_id]
     if not bot1_zones:
         await log("STRESS", "S3 skipped — Bot 1 owns no zones", "warn")
-        return
+        return True
 
     target = bot1_zones[0]
     battle = await bots[0].initiate_battle(target)
     if not battle:
         await log("STRESS", "S3 skipped — could not start battle", "warn")
-        return
+        return True
 
     await log("STRESS", f"Battle {battle['id'][:8]}… started. Now bot {bots[2].name} (outsider) tries to resolve…", "stress")
     result = await bots[2].resolve_battle(battle)
-    if result is None:
-        await log("STRESS", "S3 PASSED — outsider correctly rejected with 403", "ok")
+
+    passed = result is None
+    if passed:
+        await log("STRESS", "S3 PASSED — outsider correctly rejected", "ok")
     else:
         await log("STRESS", "S3 FAILED — outsider was allowed to resolve (logic bug!)", "error")
 
-    # Clean up: real participant resolves it
-    await asyncio.sleep(0.1)
+    # Limpieza: el atacante real resuelve
+    await _sleep(0.1)
     await bots[0].resolve_battle(battle)
+    return passed
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Final report
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def print_final_report(bots: list[Bot], client: AsyncClient) -> None:
+async def print_final_report(bots: list[Bot], client: AsyncClient, stress_passed: list[bool]) -> None:
     print("\n" + "═" * 72)
     print(f"{BOLD}  FINAL REPORT{RESET}")
     print("═" * 72)
 
-    # Zone ownership
     r = await client.get("/api/v1/zones/")
     if r.status_code == 200:
         zones = r.json()
@@ -506,9 +542,8 @@ async def print_final_report(bots: list[Bot], client: AsyncClient) -> None:
         for bot in bots:
             count = clan_counts.get(bot.clan_id, 0)
             bar = "█" * count
-            print(f"    {COLORS[bot.name]}{bot.name:14s}{RESET} {bot.clan_name:12s}  {bar} {count} zones")
+            print(f"    {COLORS[bot.name]}{bot.name:14s}{RESET} {bot.clan_name:20s}  {bar} {count} zones")
 
-    # Power standings
     r2 = await client.get("/api/v1/users/leaderboard?limit=10")
     if r2.status_code == 200:
         lb = r2.json()
@@ -519,7 +554,6 @@ async def print_final_report(bots: list[Bot], client: AsyncClient) -> None:
             print(f"    #{i}  {color}{name:14s}{RESET}  {u['power_points']:>6} power  "
                   f"{u['steps_total']:>8,} steps  {u.get('gold', 0):>4} gold")
 
-    # Combat log summary
     print(f"\n  Combat log ({len(_combat_log)} events):")
     event_counts: dict[str, int] = {}
     for e in _combat_log:
@@ -527,11 +561,17 @@ async def print_final_report(bots: list[Bot], client: AsyncClient) -> None:
     for ev, cnt in sorted(event_counts.items(), key=lambda x: -x[1]):
         print(f"    {ev:25s}  {cnt:>3}x")
 
-    # Concurrency / logic errors
     errors = [e for e in _combat_log if "fail" in e["event"]]
     print(f"\n  Concurrency / logic errors detected: {len(errors)}")
     for e in errors:
         print(f"    [{e['ts'][11:19]}] {e['actor']:14s} {e['event']:25s}  {e.get('reason','')[:60]}")
+
+    # Stress summary
+    labels = ["S1 race-to-conquer", "S2 simultaneous-attacks", "S3 unauthorized-resolve"]
+    print(f"\n  Stress tests:")
+    for label, ok in zip(labels, stress_passed):
+        badge = f"{COLORS['CORREDOR']}PASS{RESET}" if ok else f"{COLORS['INVASOR']}FAIL{RESET}"
+        print(f"    [{badge}] {label}")
 
     print("\n" + "═" * 72 + "\n")
 
@@ -540,56 +580,165 @@ async def print_final_report(bots: list[Bot], client: AsyncClient) -> None:
 #  Main
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def main() -> None:
-    # Seed Valencia zones manually — ASGITransport skips FastAPI lifespan hooks.
-    from cloudrisk_api.database.almacen_en_memoria import seed_zones
-    seed_zones()
+def _build_client(remote_url: str | None):
+    """Devuelve (client_factory, label). Si remote_url viene, HTTP real.
+       Si no, ASGITransport in-process con USE_LOCAL_STORE=1."""
+    if remote_url:
+        return httpx.AsyncClient(base_url=remote_url.rstrip("/"), timeout=30.0), "CLOUD"
 
+    os.environ.setdefault("USE_LOCAL_STORE", "1")
+    from cloudrisk_api.main import app  # import tardío, tras setear env
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    return httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30.0), "LOCAL"
 
-        # ── Instantiate bots ─────────────────────────────────────────────────
-        bots = [
-            Bot("CONQUISTADOR", "Clan Alfa",  "#ff6200", "conquistador", client),
-            Bot("INVASOR",      "Clan Beta",  "#ff0033", "invasor",      client),
-            Bot("CORREDOR",     "Clan Gamma", "#aaff00", "corredor",     client),
-            Bot("DEFENSOR",     "Clan Delta", "#00aaff", "defensor",     client),
-        ]
+
+_BOT_SPECS: dict[str, tuple[str, str, str, callable]] = {
+    "CONQUISTADOR": ("Clan Alfa",  "#ff6200", "conquistador", run_conquistador),
+    "INVASOR":      ("Clan Beta",  "#ff0033", "invasor",      run_invasor),
+    "CORREDOR":     ("Clan Gamma", "#aaff00", "corredor",     run_corredor),
+    "DEFENSOR":     ("Clan Delta", "#00aaff", "defensor",     run_defensor),
+}
+
+
+def _make_bot(name: str, suffix: str, client: AsyncClient) -> tuple[Bot, callable]:
+    clan_name, color, email_suffix, runner = _BOT_SPECS[name]
+    bot = Bot(name, f"{clan_name}{suffix}", color, f"{email_suffix}{suffix}", client)
+    return bot, runner
+
+
+async def _run_single_bot_session(
+    client: AsyncClient, mode: str, remote_url: str | None,
+    bot_name: str, rounds: int, suffix: str,
+) -> int:
+    """Modo 'juega contra una IA': lanza UN bot que juega N rondas contra
+    el backend. Pensado para jugar tú desde el frontend contra él — el bot
+    ataca a cualquier zona que vea con owner_clan_id distinto al suyo,
+    incluidas las tuyas."""
+    bot, runner = _make_bot(bot_name, suffix, client)
+
+    print("\n" + "═" * 72)
+    print(f"{BOLD}  CloudRISK — SINGLE-BOT ({mode}) — {bot_name}{RESET}")
+    if mode == "CLOUD":
+        print(f"  Target:  {remote_url}")
+        print(f"  Juega {rounds} rondas contra ti. Regístrate en el frontend con tu propio")
+        print(f"  usuario y verás al bot conquistar/atacar tus zonas en tiempo real.")
+    print(f"  Rondas:  {rounds}")
+    print(f"  Speed:   x{_SPEED_FACTOR:g}")
+    print(f"  {_now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+    print("═" * 72 + "\n")
+
+    await bot.setup()
+    await _sleep(0.1)
+    await runner(bot, rounds=rounds)
+
+    # Report mínimo: qué conquistó el bot
+    zones = await bot.list_zones()
+    mine = [z for z in zones if z.get("owner_clan_id") == bot.clan_id]
+    print("\n" + "═" * 72)
+    print(f"{BOLD}  SESSION END{RESET}")
+    print(f"  {bot_name} conquistó {len(mine)} zonas:")
+    for z in mine[:20]:
+        print(f"    - {z['name']}  (def={z.get('defense_level', 0)})")
+    if len(mine) > 20:
+        print(f"    ... y {len(mine) - 20} más")
+    print("═" * 72 + "\n")
+    return 0
+
+
+async def main(
+    remote_url: str | None,
+    speed: str,
+    single_bot: str | None,
+    rounds: int,
+) -> int:
+    _configure_speed(speed)
+    client, mode = _build_client(remote_url)
+
+    # En cloud, los bots deben tener identidades únicas por ejecución para no
+    # chocar con registros previos. En local in-memory el store es efímero.
+    suffix = f"_{int(time.time())}" if mode == "CLOUD" else ""
+
+    async with client:
+        # Seed de zonas solo en modo LOCAL — en cloud ya están en Firestore.
+        if mode == "LOCAL":
+            from cloudrisk_api.database.almacen_en_memoria import seed_zones
+            seed_zones()
+
+        if single_bot:
+            return await _run_single_bot_session(
+                client, mode, remote_url, single_bot, rounds, suffix,
+            )
+
+        # Modo completo: 4 bots + stress tests
+        bots_and_runners = [_make_bot(name, suffix, client) for name in _BOT_SPECS]
+        bots = [b for b, _ in bots_and_runners]
 
         print("\n" + "═" * 72)
-        print(f"{BOLD}  CloudRISK — BOT SIMULATION{RESET}")
-        print(f"  {len(bots)} bots  |  {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        print(f"{BOLD}  CloudRISK — BOT SIMULATION ({mode}){RESET}")
+        if mode == "CLOUD":
+            print(f"  Target: {remote_url}")
+        print(f"  {len(bots)} bots  |  rounds={rounds}  |  speed=x{_SPEED_FACTOR:g}")
+        print(f"  {_now().strftime('%Y-%m-%d %H:%M:%S')} UTC")
         print("═" * 72 + "\n")
 
-        # ── Phase 0: Registration ─────────────────────────────────────────────
         await log("SYSTEM", "Phase 0 — Registering all bots (sequential to avoid name clashes)")
         for bot in bots:
             await bot.setup()
-            await asyncio.sleep(0.05)
+            await _sleep(0.05)
 
-        # ── Phase 1: Individual strategies (concurrent) ───────────────────────
         await log("SYSTEM", "\nPhase 1 — All 4 bots run their strategies simultaneously\n")
         await asyncio.gather(
-            run_conquistador(bots[0], rounds=4),
-            run_invasor(bots[1],      rounds=4),
-            run_corredor(bots[2],     rounds=4),
-            run_defensor(bots[3],     rounds=4),
+            *[runner(bot, rounds=rounds) for bot, runner in bots_and_runners]
         )
 
-        # ── Phase 2: Stress tests ─────────────────────────────────────────────
         await log("SYSTEM", "\nPhase 2 — Stress tests\n")
-        await stress_s1_race_to_conquer(bots)
-        await asyncio.sleep(0.2)
-        await stress_s2_simultaneous_attacks(bots)
-        await asyncio.sleep(0.2)
-        await stress_s3_unauthorized_resolve(bots)
+        stress_passed = []
+        stress_passed.append(await stress_s1_race_to_conquer(bots))
+        await _sleep(0.2)
+        stress_passed.append(await stress_s2_simultaneous_attacks(bots))
+        await _sleep(0.2)
+        stress_passed.append(await stress_s3_unauthorized_resolve(bots))
 
-        # ── Final report ──────────────────────────────────────────────────────
-        await print_final_report(bots, client)
+        await print_final_report(bots, client, stress_passed)
+
+    return 0 if all(stress_passed) else 1
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="CloudRISK bot simulator / stress test / human-vs-AI playmate.",
+    )
+    parser.add_argument(
+        "--url",
+        default=os.environ.get("CLOUDRISK_API_URL"),
+        help="URL base de la API desplegada (p.ej. https://cloudrisk-api-xxx.run.app). "
+             "Si no se pasa, corre en modo local in-process con USE_LOCAL_STORE=1. "
+             "Alternativa: env var CLOUDRISK_API_URL.",
+    )
+    parser.add_argument(
+        "--speed",
+        choices=("slow", "normal", "fast"),
+        default="normal",
+        help="slow=x20 (visual, ~10 min) | normal=x1 (smoke test) | fast=x0.3 (CI).",
+    )
+    parser.add_argument(
+        "--single-bot",
+        choices=list(_BOT_SPECS.keys()),
+        default=None,
+        help="Lanza UN solo bot (sin stress tests). Úsalo en cloud para jugar "
+             "contra él desde el frontend.",
+    )
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        default=4,
+        help="Número de rondas por bot (default 4). Para jugar partidas largas "
+             "usa algo como --rounds 30 junto con --speed slow.",
+    )
+    args = parser.parse_args()
+
     t0 = time.perf_counter()
-    asyncio.run(main())
+    exit_code = asyncio.run(main(args.url, args.speed, args.single_bot, args.rounds))
     elapsed = time.perf_counter() - t0
-    print(f"Simulation completed in {elapsed:.2f}s\n")
+    print(f"Simulation completed in {elapsed:.2f}s (exit={exit_code})\n")
+    sys.exit(exit_code)

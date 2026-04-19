@@ -182,6 +182,45 @@ echo -n 'TU_KEY_DE_OPENWEATHER' | gcloud secrets versions add openweather-api-ke
 
 Cloud Run la recoge automáticamente (lee `version = "latest"`).
 
+### 7.5 — Probar el stack con `simulador_bots.py`
+
+El mismo script sirve para validar el backend en los 4 escenarios que nos importan. Lo llamas igual en local y en cloud — cambia solo el flag `--url`. Si un stress test falla, sale con exit code 1 (útil para CI).
+
+**Caso A — smoke test rápido en local (ASGI in-process, sin Docker):**
+```
+python backend/simulador_bots.py --speed fast --rounds 2
+```
+Registra 4 bots contra el backend FastAPI in-memory, corre las 4 estrategias concurrentes y los 3 stress tests (S1 race-to-conquer, S2 simultaneous-attacks, S3 unauthorized-resolve). Tarda ~1 min.
+
+**Caso B — partida larga visual en local:**
+```
+python backend/simulador_bots.py --speed slow --rounds 10
+```
+Multiplica los sleeps por 20 — puedes seguir cada acción por terminal como si fuera una partida real. Útil para enseñar cómo se ven las rondas.
+
+**Caso C — smoke test contra el Cloud Run desplegado:**
+```
+python backend/simulador_bots.py --url https://cloudrisk-api-xxx.run.app --speed fast --rounds 2
+```
+Los bots se registran con sufijo único (`_{timestamp}`) para no chocar con usuarios previos en Firestore. Si algo está roto en producción, el script lo detecta.
+
+**Caso D — jugar tú desde el frontend contra UN solo bot:**
+```
+python backend/simulador_bots.py --url https://cloudrisk-api-xxx.run.app --single-bot INVASOR --rounds 30 --speed slow
+```
+Lanza un único bot (`CONQUISTADOR`, `INVASOR`, `CORREDOR` o `DEFENSOR`), sin stress tests. Abres el frontend, te registras con tu propio usuario, y ves al bot conquistar/atacar zonas en tiempo real. Es la forma más bonita de "demostrar que el stack entero funciona".
+
+**Extra — CI automatizado (GitHub Actions):**
+
+El workflow [`.github/workflows/smoke-test.yml`](.github/workflows/smoke-test.yml) corre el Caso C todos los lunes a las 06:00 UTC contra la URL guardada en el secret `CLOUDRISK_API_URL`. También se puede disparar a mano (`workflow_dispatch`) pegando la URL. Si el backend se cae entre demos, te enteras antes de entrar a clase.
+
+Para activarlo:
+```
+# Settings > Secrets and variables > Actions > New repository secret
+#   Name:  CLOUDRISK_API_URL
+#   Value: https://cloudrisk-api-xxx.run.app
+```
+
 ---
 
 ### ¿Qué hace `infrastructure/deploy.sh` por dentro?

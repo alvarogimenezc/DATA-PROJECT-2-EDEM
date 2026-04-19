@@ -31,8 +31,9 @@ terraform {
   }
 
   # STATE remoto en GCS — IMPORTANTE: este bucket debe existir ANTES de
-  # correr `terraform init`. Lo creamos a mano una sola vez con:
-  #   gsutil mb -l europe-west1 gs://cloudrisk-492619-tfstate
+  # correr `terraform init`. Lo crea `infrastructure/deploy.sh` por ti.
+  # Si cambias el project_id, edita este "bucket" para que case con
+  # <tu-project-id>-tfstate (deploy.sh usa ese patrón).
   backend "gcs" {
     bucket = "cloudrisk-492619-tfstate"
     prefix = "terraform/state"

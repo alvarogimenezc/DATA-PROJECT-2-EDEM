@@ -1,0 +1,57 @@
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ Cloud smoke test — corre el simulador de bots contra la API desplegada  │
+# │                                                                         │
+# │ Cuándo corre:                                                           │
+# │   1) A mano (workflow_dispatch) — tú pegas la URL del Cloud Run         │
+# │   2) Todos los lunes a las 06:00 UTC — usa el secret CLOUDRISK_API_URL  │
+# │                                                                         │
+# │ Qué hace:                                                               │
+# │   - Registra 4 bots en la API desplegada (con sufijo único por run)     │
+# │   - Ejecuta 4 estrategias concurrentes + 3 stress tests                 │
+# │   - Exit code ≠ 0 si algún stress test falla → el workflow queda rojo   │
+# │                                                                         │
+# │ Setup mínimo para que el cron funcione:                                 │
+# │   Settings > Secrets > Actions > New repository secret                  │
+# │     Name:  CLOUDRISK_API_URL                                            │
+# │     Value: https://cloudrisk-api-xxx.run.app                            │
+# └─────────────────────────────────────────────────────────────────────────┘
+
+name: Cloud smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "URL del Cloud Run (p.ej. https://cloudrisk-api-xxx.run.app)"
+        required: true
+        type: string
+  schedule:
+    # Lunes a las 06:00 UTC — si el backend lleva roto desde el viernes, te
+    # enteras al llegar a la oficina en vez de en la demo.
+    - cron: "0 6 * * 1"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install httpx
+        run: pip install --no-cache-dir httpx
+
+      - name: Run bot simulator against deployed API
+        env:
+          # inputs.api_url viene del workflow_dispatch; si es cron, fallback al secret.
+          CLOUDRISK_API_URL: ${{ inputs.api_url || secrets.CLOUDRISK_API_URL }}
+        run: |
+          if [ -z "$CLOUDRISK_API_URL" ]; then
+            echo "::error::No hay URL — rellena el input o configura el secret CLOUDRISK_API_URL"
+            exit 1
+          fi
+          python backend/simulador_bots.py --speed fast --rounds 2
