@@ -52,7 +52,7 @@ Cada archivo posee un recurso y exporta un `router = APIRouter(prefix="/<recurso
 | **`ejercitos.py`** | `GET /armies/balance`, `POST /armies/place`, `GET /armies/locations`, `POST /armies/fortify` | Desplegar / mover tropas entre zonas propias. `fortify` respeta la invariante `MIN_GARRISON` (no deja la origen por debajo de 2). |
 | **`turno.py`** | `POST /turn/setup` (🔒 header `X-Scheduler-Token`), `GET /turn/`, `POST /turn/advance`, `POST /turn/end` | Máquina de turnos del juego. `setup` clusteriza zonas entre jugadores y es sensible — exige el token compartido salvo en modo local (`USE_LOCAL_STORE=1`). |
 | **`analiticas.py`** 🆕 | `GET /analytics/top-steps-month`, `GET /analytics/top-rainy-days`, `GET /analytics/top-bad-air`, `GET /analytics/user/{player_id}/history` | Lee `cloudrisk.player_scoring_events` × `environmental_factors` en BigQuery. Caché LRU 60 s para evitar un query por request. La página `/analytics` del frontend consume estos endpoints. |
-| **`compatibilidad_equipo.py`** | Endpoints de compatibilidad con el backend CloudRISK del equipo | Proxy opcional — ver `services/adaptador_cloudrisk.py`. |
+| **`compatibilidad_equipo.py`** | `GET /state/locations`, `GET /state/player/{id}`, `POST /actions/place` | Rutas alias que mantienen compatibilidad con el contrato del equipo. |
 | **`multiplicadores.py`** | `GET /multipliers/current` | Último multiplicador ambiental efectivo (cachea el último `environmental_factors`). |
 | **`misiones.py`** | `GET /missions/`, `POST /missions/{id}/claim` | Misiones/achievements del juego. |
 
@@ -63,7 +63,7 @@ Cada archivo posee un recurso y exporta un `router = APIRouter(prefix="/<recurso
 | **`autenticacion.py`** | Emisión de JWT (`create_access_token`) + la dependencia FastAPI `get_current_user` que usan todas las rutas protegidas. El hashing con Bcrypt vive en `repositories/usuarios.py`. |
 | **`asesor_ia.py`** | Asesor táctico gratis, sin coste de API. Dada una batalla, devuelve una pista de una línea basada en matemáticas simples de defensor/atacante. Lo usa `GET /battles/{id}/advice`. |
 | **`gestor_websocket.py`** | Clase `ConnectionManager` que `main.py` instancia. Lleva registro de las conexiones WS abiertas por `user_id` y envía mensajes personales o broadcast. |
-| **`adaptador_cloudrisk.py`** | Proxy opcional al backend CloudRISK del equipo (alvarogimenezc/DATA-PROJECT-2-EDEM). Se activa con `CLOUDRISK_API_URL`. Expone `get_locations()`, `get_player_state()`, `place_armies()`. |
+
 
 ### `repositories/` — acceso a datos
 
@@ -87,7 +87,7 @@ Dos implementaciones detrás de los mismos nombres de función. Cada módulo com
 | **`prueba_salud.py`** | `/health` devuelve 200 + `{"status":"ok"}`. |
 | **`prueba_zonas.py`** | `GET /api/v1/zones/` devuelve las 87 zonas de Valencia sembradas. |
 | **`prueba_usuarios.py`** | Round-trip register / login / `/me`. Incluye un `xfail` estricto que documenta un bug real: `/users/me` filtra `hashed_password`; elimina el `xfail` cuando `routers/usuarios.py::get_me` lo filtre. |
-| **`prueba_adaptador_cloudrisk.py`** | El adapter está desactivado cuando `CLOUDRISK_API_URL` no está definido, y activado (con la barra final normalizada) cuando sí lo está. |
+
 
 ## Cambiar entre local y Firestore
 
