@@ -58,6 +58,8 @@ services:
       PUBSUB_EMULATOR_HOST: pubsub-emulator:8085
       SECRET_KEY: dev-secret-key-change-in-prod
       PORT: 8080
+    volumes:
+      - ./frontend/public/valencia_districts.geojson:/app/geojson/valencia_districts.geojson:ro
     ports:
       - "8080:8080"
     depends_on:

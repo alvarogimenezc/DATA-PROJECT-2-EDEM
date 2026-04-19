@@ -21,7 +21,9 @@ USE_LOCAL = os.environ.get("USE_LOCAL_STORE", "0") == "1"
 
 
 # ─── GeoJSON de Valencia cargado del frontend/public (single source of truth) ──
-_GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_barrios_clean.geojson"
+_GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_districts.geojson"
+if not _GEOJSON_PATH.exists():
+    _GEOJSON_PATH = Path("/app/geojson/valencia_districts.geojson")  # Docker mount
 _CENTROID_CACHE: dict[str, tuple[float, float]] | None = None
 
 

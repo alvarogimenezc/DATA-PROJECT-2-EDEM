@@ -25,10 +25,12 @@ from collections import defaultdict
 from pathlib import Path
 
 
-_GEOJSON_PATH = Path(__file__).resolve().parents[2] / "frontend" / "public" / "valencia_barrios_clean.geojson"
+_GEOJSON_PATH = Path(__file__).resolve().parents[2] / "frontend" / "public" / "valencia_districts.geojson"
 # Si ejecutas desde backend/ el path arriba falla — alternativa con parents[3]
 if not _GEOJSON_PATH.exists():
-    _GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_barrios_clean.geojson"
+    _GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_districts.geojson"
+if not _GEOJSON_PATH.exists():
+    _GEOJSON_PATH = Path("/app/geojson/valencia_districts.geojson")  # Docker mount
 
 _ADJACENCY_CACHE: dict[str, frozenset[str]] | None = None
 
