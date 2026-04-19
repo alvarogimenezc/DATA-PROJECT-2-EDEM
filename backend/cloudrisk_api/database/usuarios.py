@@ -94,15 +94,6 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def list_all_users() -> list[dict]:
-    """Return all users (stripped of password). Used for bulk operations like decay."""
-    if USE_LOCAL:
-        users = store.doc_stream(COLLECTION)
-    else:
-        users = [doc.to_dict() for doc in db.collection(COLLECTION).stream()]
-    return [{k: v for k, v in u.items() if k != "hashed_password"} for u in users]
-
-
 def list_users_top(limit: int = 10) -> list[dict]:
     """Return top users by power_points, stripped of sensitive fields."""
     SAFE_FIELDS = {"id", "name", "clan_id", "steps_total", "power_points", "gold", "level"}

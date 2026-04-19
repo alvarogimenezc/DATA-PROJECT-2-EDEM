@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from cloudrisk_api.configuracion import settings, MIN_GARRISON
+from cloudrisk_api.configuracion import MIN_GARRISON
 from cloudrisk_api.database import usuarios as usuarios_repo, zonas as zonas_repo
 from cloudrisk_api.services.autenticacion import get_current_user
 from cloudrisk_api.services import multiplicadores as multipliers

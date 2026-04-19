@@ -126,11 +126,6 @@ def neighbors_of(zone_id: str) -> frozenset[str]:
     return get_adjacency().get(zone_id, frozenset())
 
 
-def are_adjacent(zone_a: str, zone_b: str) -> bool:
-    """True si las dos zonas comparten frontera."""
-    return zone_b in neighbors_of(zone_a)
-
-
 def stats() -> dict:
     """Útil para debugging: cuántos vecinos promedio/min/max."""
     adj = get_adjacency()
