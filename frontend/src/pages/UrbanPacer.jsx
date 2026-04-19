@@ -3539,9 +3539,15 @@ function SimulateBotsButton({ myUserId, onRefresh }) {
   // deshabilito con texto claro; si no, habilito para que corran los bots.
   if (!turn) return null
   const disabled = playing || isMyTurn
+  // El label cambia en 2 estados dentro de una iteración:
+  //  - Mientras espera la respuesta del backend → "Jugando Sur…" (sin resumen
+  //    aún, o resumen del bot anterior con nombre distinto al currentBot).
+  //  - Tras volver el simulate_bots → lastSummary.bot === currentBot, enseño
+  //    lo que ese bot acabó de hacer durante los 4.5 s de pausa.
+  const showSummary = lastSummary && lastSummary.bot === currentBot
   const label = playing
-    ? (lastSummary && lastSummary.bot !== currentBot
-        ? `${lastSummary.bot}: ${lastSummary.text} → jugando ${currentBot}…`
+    ? (showSummary
+        ? `✓ ${currentBot}: ${lastSummary.text} (${step}/3)`
         : `Jugando ${currentBot}… (${step}/3)`)
     : isMyTurn
       ? '🎯 Es tu turno — juégalo y termínalo'
