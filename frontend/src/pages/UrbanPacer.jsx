@@ -1588,6 +1588,14 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
   const [targetZone, setTargetZone] = useState('') // for fortify: destination zone id
   const [attackResult, setAttackResult] = useState(null)  // { attacker_rolls, defender_rolls, conquered, ... }
   const [turn, setTurn] = useState(null)
+  // Contexto del ataque precalculado al abrir el modal: ¿quién defiende la
+  // zona?, ¿cuántas tropas tiene?, ¿tengo alguna zona propia adyacente con
+  // ≥2 tropas desde la que atacar? Así desactivamos "LANZAR OFENSIVA" antes
+  // de que el usuario clique en vano y mostramos info útil DE LA ZONA OBJETIVO
+  // (en vez de mi balance de tropas, que en un modal de ataque no pinta nada).
+  const [attackContext, setAttackContext] = useState({
+    loaded: false, validOrigins: [], targetDefense: 0, targetOwner: null,
+  })
   // Gate antes de que el backend rechace el round-trip: leemos /turn/ al
   // abrir el panel y cada 3 s. Si no es mi turno, mostramos un banner y
   // desactivamos el botón de acción (evita 403 silenciosos).
@@ -1623,6 +1631,42 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
     const id = setInterval(poll, 3000)
     return () => { alive = false; clearInterval(id) }
   }, [])
+
+  // Precarga del contexto de ataque: una sola vez al abrir el modal sobre
+  // una zona enemiga. Si luego cambian las zonas (yo conquisto algo nuevo)
+  // el usuario ya habrá cerrado y reabierto el modal, así que no hace falta
+  // refrescar esto en un interval.
+  useEffect(() => {
+    if (kind !== 'attack' || !zone?.id) return
+    let cancelled = false
+    Promise.all([
+      api.get('/api/v1/zones/adjacency'),
+      api.get('/api/v1/zones/'),
+    ]).then(([adjRes, zonesRes]) => {
+      if (cancelled) return
+      const adj = adjRes.data?.adjacency || {}
+      const neighborIds = new Set(adj[zone.id] || [])
+      const allZones = zonesRes.data || []
+      const target = allZones.find(z => z.id === zone.id)
+      const myValid = allZones.filter(z =>
+        z.owner_clan_id === user?.id &&
+        (z.defense_level || 0) >= 2 &&
+        neighborIds.has(z.id)
+      )
+      setAttackContext({
+        loaded: true,
+        validOrigins: myValid,
+        targetDefense: Number(target?.total_armies ?? target?.defense_level ?? zone.total_armies ?? zone.defense_level ?? 0),
+        targetOwner: target?.owner_clan_id ?? zone.owner_clan_id ?? null,
+      })
+    }).catch(() => {
+      // Si el endpoint falla, dejamos loaded=true con origins vacío pero sin
+      // bloquear — el check post-click en handleAction seguirá actuando de
+      // red de seguridad.
+      if (!cancelled) setAttackContext(s => ({ ...s, loaded: true }))
+    })
+    return () => { cancelled = true }
+  }, [kind, zone?.id, user?.id])
 
   const max = kind === 'fortify'
     ? Math.max(0, (zone?.total_armies || 1) - 1) // must leave at least 1
@@ -1739,12 +1783,12 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
         </div>
 
         <div className="p-6 space-y-4">
-          {kind !== 'fortify' && balanceError && (
+          {kind === 'deploy' && balanceError && (
             <div className="px-4 py-2 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs">
               No se pudo cargar tu balance de tropas. El despliegue puede no reflejar tu saldo real.
             </div>
           )}
-          {kind !== 'fortify' && balance && (
+          {kind === 'deploy' && balance && (
             <div className="grid grid-cols-3 gap-2">
               <div className="rounded-xl p-3 bg-white/5 border border-white/10 text-center">
                 <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Disponibles</div>
@@ -1758,6 +1802,62 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
                 <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Total</div>
                 <div className="text-xl font-display font-extrabold text-white">{balance.armies_total_earned}</div>
               </div>
+            </div>
+          )}
+          {/* En el modal de ATAQUE las pills útiles son las de la zona OBJETIVO
+              (defensa / propietario / zonas mías adyacentes desde las que atacar),
+              no mi balance personal — que para Risk da igual, ataco con las
+              tropas ya desplegadas en el mapa. */}
+          {kind === 'attack' && (() => {
+            const ownerNames = {
+              'demo-player-001': 'Norte', 'demo-player-002': 'Sur',
+              'demo-player-003': 'Este',  'demo-player-004': 'Oeste',
+            }
+            const ownerColors = {
+              'demo-player-001': '#f43f5e', 'demo-player-002': '#facc15',
+              'demo-player-003': '#06b6d4', 'demo-player-004': '#a855f7',
+            }
+            const owner = attackContext.targetOwner
+            const ownerLabel = owner ? (ownerNames[owner] || owner.slice(0, 6)) : 'Libre'
+            const ownerColor = owner ? (ownerColors[owner] || '#9ca3af') : '#9ca3af'
+            const adyCount = attackContext.validOrigins.length
+            const adyColor = adyCount > 0 ? '#c8ff00' : '#6b7280'
+            return (
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-xl p-3 bg-white/5 border border-white/10 text-center">
+                  <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Defensa</div>
+                  <div className="text-xl font-display font-extrabold" style={{ color: '#f43f5e' }}>
+                    {attackContext.loaded ? attackContext.targetDefense : '—'}
+                  </div>
+                </div>
+                <div className="rounded-xl p-3 bg-white/5 border border-white/10 text-center">
+                  <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Propietario</div>
+                  <div className="text-sm font-display font-extrabold truncate" style={{ color: ownerColor }}>
+                    {attackContext.loaded ? ownerLabel : '…'}
+                  </div>
+                </div>
+                <div
+                  className="rounded-xl p-3 bg-white/5 border border-white/10 text-center"
+                  title="Zonas tuyas adyacentes a este objetivo con ≥2 tropas (desde donde puedes lanzar el ataque)."
+                >
+                  <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Mis Ady.</div>
+                  <div className="text-xl font-display font-extrabold" style={{ color: adyColor }}>
+                    {attackContext.loaded ? adyCount : '—'}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+          {/* Aviso claro cuando no hay ninguna zona mía adyacente con tropas:
+              es la razón #1 por la que "no puedo atacar ciertas zonas". Mejor
+              pillarlo aquí que en el error post-click. */}
+          {kind === 'attack' && attackContext.loaded && attackContext.validOrigins.length === 0 && isMyTurn && (
+            <div className="px-4 py-3 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs flex items-start gap-2">
+              <span className="text-base leading-none">⚠️</span>
+              <span>
+                No tienes ninguna zona adyacente a ésta con ≥2 tropas. Conquista
+                primero un barrio vecino (o refuerza uno que ya toque el objetivo).
+              </span>
             </div>
           )}
 
@@ -1897,6 +1997,7 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
               || !isMyTurn
               || (kind === 'fortify' && max === 0)
               || (kind === 'deploy' && Number(balance?.armies_available || 0) === 0)
+              || (kind === 'attack' && attackContext.loaded && attackContext.validOrigins.length === 0)
             }
             onClick={handleAction}
             className="w-full py-4 rounded-2xl font-display font-bold text-white flex items-center justify-center gap-2 disabled:opacity-50"
@@ -2681,28 +2782,11 @@ function RunningTipsCarousel() {
 function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onLogout, clans, zones, battles, onRefresh, loading = false, wsStatus = 'idle', missions = [], battleHistory = [], leaderboard = [], onClaimMission, onReopenTutorial }) {
   const [claimReward, setClaimReward] = useState(null)
   const [burst, setBurst] = useState([])
-  const [simulating, setSimulating] = useState(false)
-  const [lastSimResult, setLastSimResult] = useState(null)
 
-  // Dispara una ronda de acciones de los 3 bots contrarios. Endpoint
-  // `/simulate_bots/run` persiste los cambios en zonas (conquer/attack/
-  // fortify) y onRefresh() los trae al mapa.
-  const handleSimulateBots = async () => {
-    if (simulating) return
-    setSimulating(true)
-    try {
-      const { data } = await api.post('/api/v1/simulate_bots/run', { rounds: 2 })
-      setLastSimResult(data)
-      await onRefresh?.()
-      setTimeout(() => setLastSimResult(null), 6000)
-    } catch (err) {
-      const msg = err?.response?.data?.detail || err.message || 'Error desconocido'
-      setLastSimResult({ error: msg })
-      setTimeout(() => setLastSimResult(null), 6000)
-    } finally {
-      setSimulating(false)
-    }
-  }
+  // El botón "Jugar turnos de bots" vive ahora en el HUD del mapa
+  // (SimulateBotsButton, junto al TurnBanner/EndTurnButton). Aquí en el
+  // lobby no pinta nada: cuando estás en el Dashboard aún no ha empezado
+  // la partida en el sentido visual del mapa.
 
   // Contadores del HUD: usamos el total real de zonas del backend (86 en v3)
   // en vez del cap artificial de 49 que teníamos antes — con setup inicial
@@ -3009,43 +3093,6 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
               ))}
             </div>
 
-            {/* Botón "Simular bots" — dispara /simulate_bots/run y refresca
-                zonas para que el mapa muestre las conquistas de los 3 bots
-                contrarios al jugador. El setup inicial (15 zonas/jugador +
-                30 pool) lo hace automáticamente el backend al arrancar. */}
-            <button
-              type="button"
-              onClick={handleSimulateBots}
-              disabled={simulating}
-              className="mt-3 w-full rounded-xl border border-neon-lime/40 px-3 py-2 text-[10px] font-display font-bold uppercase tracking-widest transition-all disabled:opacity-50"
-              style={{
-                background: simulating ? 'rgba(200,255,0,0.08)' : 'rgba(200,255,0,0.14)',
-                color: '#c8ff00',
-                boxShadow: simulating ? 'none' : '0 0 12px rgba(200,255,0,0.15)',
-              }}
-            >
-              {simulating ? 'Simulando…' : '🤖 Simular bots (2 rondas)'}
-            </button>
-
-            {lastSimResult && (
-              <div
-                className="mt-2 rounded-lg border border-white/10 px-2 py-1.5 text-[10px] text-white/80"
-                style={{ background: 'rgba(0,0,0,0.35)' }}
-              >
-                {lastSimResult.error ? (
-                  <span className="text-red-400">⚠ {lastSimResult.error}</span>
-                ) : (
-                  <span>
-                    ✓ {lastSimResult.total_actions} acciones en {lastSimResult.rounds} rondas —
-                    {' '}
-                    {Object.entries(lastSimResult.summary || {}).map(([bot, counts]) => {
-                      const short = bot.replace('demo-player-', '#')
-                      return `${short}: ${counts.conquer}c/${counts.attack}a/${counts.fortify}f`
-                    }).join(' · ')}
-                  </span>
-                )}
-              </div>
-            )}
           </div>
 
           {/* Misiones (mini-card del lobby — versión corta) — brand palette */}
@@ -3416,6 +3463,110 @@ function EndTurnButton({ myUserId }) {
   )
 }
 
+// Vive junto a EndTurnButton en el HUD del mapa — cuando NO es mi turno,
+// este botón encadena llamadas a /simulate_bots/run en modo "step" (un bot
+// por llamada, pausa de 4.5 s) hasta que vuelve mi turno. Así se ve:
+//  - El TurnBanner cambiando: "Turno de Sur" → "Turno de Este" → "Turno de Oeste"
+//  - El mapa repintándose entre bot y bot gracias al onRefresh
+//  - Resumen de lo que hizo el bot (qué conquistó / atacó / fortificó)
+// En total ~14 s para los 3 bots — Fran dijo "hazlos más lentos para
+// percatarme" así que cadencia cómoda > velocidad.
+function SimulateBotsButton({ myUserId, onRefresh }) {
+  const [turn, setTurn] = useState(null)
+  const [playing, setPlaying] = useState(false)
+  const [step, setStep] = useState(0)
+  const [currentBot, setCurrentBot] = useState('')
+  // Resumen del último bot que acabó (lo muestro durante la pausa para que
+  // se vea qué hizo antes de que el siguiente entre en escena).
+  const [lastSummary, setLastSummary] = useState(null)
+  useEffect(() => {
+    let alive = true
+    const poll = async () => {
+      try { const r = await api.get('/api/v1/turn/'); if (alive) setTurn(r.data) }
+      catch { /* el banner ya avisa si /turn/ cae */ }
+    }
+    poll()
+    const id = setInterval(poll, 3000)
+    return () => { alive = false; clearInterval(id) }
+  }, [])
+
+  const names = {
+    'demo-player-001': 'Norte', 'demo-player-002': 'Sur',
+    'demo-player-003': 'Este',  'demo-player-004': 'Oeste',
+  }
+  const isMyTurn = turn && turn.current_player_id === myUserId
+
+  const run = async () => {
+    if (playing) return
+    setPlaying(true); setStep(0); setLastSummary(null)
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+    try {
+      // Max 5 iteraciones como red de seguridad por si el backend nunca
+      // devolviera el turno al usuario (no debería, pero vale más pecar).
+      for (let i = 0; i < 5; i++) {
+        const tRes = await api.get('/api/v1/turn/')
+        const curr = tRes.data
+        if (curr?.current_player_id === myUserId) break
+        const botName = names[curr.current_player_id] || 'bot'
+        setCurrentBot(botName)
+        setStep(i + 1)
+        const simRes = await api.post('/api/v1/simulate_bots/run', { mode: 'step', actions_per_bot_turn: 3 })
+        await onRefresh?.()
+        // Monto el "X conquistó N, atacó N, fortificó N" del summary del
+        // backend para que se vea durante la pausa de 4.5 s.
+        const played = simRes?.data?.turns_played?.[0]
+        if (played?.summary) {
+          const s = played.summary
+          const parts = []
+          if (s.conquer) parts.push(`${s.conquer} conq.`)
+          if (s.attack)  parts.push(`${s.attack} ataq.`)
+          if (s.fortify) parts.push(`${s.fortify} fort.`)
+          setLastSummary({ bot: botName, text: parts.join(' · ') || 'sin acciones' })
+        }
+        await sleep(4500)
+      }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn('[simulate bots]', e?.message || e)
+    } finally {
+      setPlaying(false); setStep(0); setCurrentBot(''); setLastSummary(null)
+      // Refresh final por si la última iteración no alcanzó a repintar
+      // (p. ej. salto del for por current_player_id === myUserId).
+      try { await onRefresh?.() } catch { /* ignore */ }
+    }
+  }
+
+  // Estado: oculto mientras no sé de quién es el turno. Si es mi turno
+  // deshabilito con texto claro; si no, habilito para que corran los bots.
+  if (!turn) return null
+  const disabled = playing || isMyTurn
+  const label = playing
+    ? (lastSummary && lastSummary.bot !== currentBot
+        ? `${lastSummary.bot}: ${lastSummary.text} → jugando ${currentBot}…`
+        : `Jugando ${currentBot}… (${step}/3)`)
+    : isMyTurn
+      ? '🎯 Es tu turno — juégalo y termínalo'
+      : '🤖 Jugar turnos de bots'
+  return (
+    <button
+      type="button"
+      onClick={run}
+      disabled={disabled}
+      title={isMyTurn ? 'Termina tu turno primero para que jueguen los bots.' : 'Los bots juegan uno a uno hasta que vuelva tu turno.'}
+      className="px-4 py-2.5 rounded-full font-bold text-[11px] uppercase tracking-nike-wide
+                 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed
+                 flex items-center gap-2 border"
+      style={{
+        background: disabled ? 'rgba(200,255,0,0.06)' : 'rgba(200,255,0,0.16)',
+        borderColor: 'rgba(200,255,0,0.45)',
+        color: '#c8ff00',
+        boxShadow: disabled ? 'none' : '0 0 14px rgba(200,255,0,0.25)',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
 function EnvironmentBanner() {
   const [data, setData] = useState({ air: 1, weather: 1, combined: 1 })
 
@@ -3702,6 +3853,7 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
           <TurnBanner myUserId={currentUserId} />
           <EnvironmentBanner />
           <EndTurnButton myUserId={currentUserId} />
+          <SimulateBotsButton myUserId={currentUserId} onRefresh={refreshData} />
         </div>
 
         {/* Legend + WS indicator.
