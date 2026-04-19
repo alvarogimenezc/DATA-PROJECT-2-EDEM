@@ -238,14 +238,17 @@ def advance_phase(current_user: dict = Depends(get_current_user)):
 @router.post("/end")
 def end_turn(current_user: dict = Depends(get_current_user)):
     """
-    Termina tu turno. El backend rota al siguiente jugador Y LE CONCEDE
-    sus refuerzos automáticamente (Risk rule: max(3, zones/3) armies).
+    Termina tu turno. El jugador ACTUAL recibe sus refuerzos (por las zonas
+    que controla ahora) y luego el turno pasa al siguiente.
+
+    Fix: antes se daba el bonus al SIGUIENTE jugador en lugar de al actual,
+    así que el humano nunca recibía sus tropas y los bots las recibían doble.
     """
     state = game_state.current()
     if state.current_player_id != current_user["id"]:
         raise HTTPException(status_code=403, detail="It's not your turn")
+    bonus_info = _grant_turn_bonus(current_user["id"])
     new_state = game_state.end_turn()
-    bonus_info = _grant_turn_bonus(new_state.current_player_id)
     return {**new_state.to_dict(), "bonus_granted": bonus_info}
 
 

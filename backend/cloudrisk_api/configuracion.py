@@ -84,9 +84,9 @@ class Settings(BaseSettings):
     INITIAL_ARMIES_PER_ZONE: int = 2
     # Armies mínimas que recibes cada turno aunque tengas 0 zonas
     # (evita que un jugador casi eliminado no pueda hacer nada).
-    MIN_TURN_BONUS: int = 3
-    # Un "army" cada X zonas poseídas (Risk oficial usa 3).
-    ZONES_PER_BONUS_ARMY: int = 3
+    MIN_TURN_BONUS: int = 6
+    # Un "army" cada X zonas poseídas (Risk oficial usa 3; usamos 2 para más acción).
+    ZONES_PER_BONUS_ARMY: int = 2
 
     # Pydantic v2 style (was 'class Config: env_file = ...' in v1, deprecated).
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

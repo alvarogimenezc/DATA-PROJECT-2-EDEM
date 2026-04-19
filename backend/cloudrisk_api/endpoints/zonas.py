@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 
 from cloudrisk_api.configuracion import settings, MIN_GARRISON
-from cloudrisk_api.database import zonas as zonas_repo, clanes as clanes_repo, usuarios as usuarios_repo, publicador_pubsub as pubsub_publisher
+from cloudrisk_api.database import zonas as zonas_repo, clanes as clanes_repo, usuarios as usuarios_repo, publicador_pubsub as pubsub_publisher, batallas as batallas_repo
 from cloudrisk_api.services.autenticacion import get_current_user
 from cloudrisk_api.services import estado_juego as game_state, dados as dice, adyacencia as adjacency
 from pydantic import BaseModel
@@ -228,6 +228,26 @@ def attack_zone(zone_id: str, req: AttackRequest, current_user: dict = Depends(g
         defender_losses=combat.defender_losses,
         conquered=conquered,
     ))
+
+    # Persiste el combate en el historial de batallas (best-effort).
+    try:
+        user_owner = current_user.get("clan_id") or current_user["id"]
+        battle = batallas_repo.create_battle(
+            zone_id=zone_id,
+            attacker_clan_id=user_owner,
+            defender_clan_id=target_owner or "",
+            attacker_power=source_armies,
+            defender_power=target_armies,
+        )
+        batallas_repo.update_battle(battle["id"], {
+            "result": "attacker_wins" if conquered else "defender_wins",
+            "attacker_rolls": combat.attacker_rolls,
+            "defender_rolls": combat.defender_rolls,
+            "attacker_losses": combat.attacker_losses,
+            "defender_losses": combat.defender_losses,
+        })
+    except Exception as exc:
+        logger.warning("battle history save failed (non-critical): %s", exc)
 
     return {
         "conquered": conquered,

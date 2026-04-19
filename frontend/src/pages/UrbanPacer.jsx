@@ -20,7 +20,7 @@ import {
   Activity, Bolt, Crown, Footprints, Gift, Map as MapIcon,
   Medal, Play, Power, Target, Trophy,
   X, Zap, ChevronLeft, Flame, TrendingUp, Swords, Shield, Plus, Minus,
-  BookOpen, ChevronRight, Send,
+  BookOpen, ChevronRight, Send, ScrollText,
   // Iconos para carruseles (reemplazan emojis — monocromo, coloreable)
   Calendar, Repeat, Mountain, MessageCircle, Timer, Utensils, Pill,
   Droplet, Clock, Moon, Snowflake, Flag, Lightbulb,
@@ -2200,7 +2200,14 @@ function RightPanel({ player, clans, missions, battleHistory, leaderboard, zones
                     className={`flex items-center gap-2 rounded-xl px-2.5 py-2 border transition ${!won && !ongoing ? 'opacity-55' : ''}`}
                     style={{ background: 'rgba(200,255,0,0.03)', borderColor: 'rgba(200,255,0,0.15)' }}>
                     <span className="text-[9px] font-black uppercase tracking-widest flex-shrink-0" style={{ color: labelColor }}>{label}</span>
-                    <span className="flex-1 text-xs text-white truncate">{b.zone_name || 'Zona'}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-white truncate">{b.zone_name || 'Zona'}</div>
+                      {b.attacker_rolls?.length > 0 && (
+                        <div className="text-[9px] text-white/40">
+                          [{b.attacker_rolls.join(',')}] vs [{(b.defender_rolls || []).join(',')}]
+                        </div>
+                      )}
+                    </div>
                     {ongoing ? (
                       <button
                         onClick={() => handleResolve(b.id)}
@@ -2885,7 +2892,7 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-display font-extrabold text-white text-lg leading-none">{player.name}</span>
+              <NameEditor fallback={player.name} />
               <span
                 className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest"
                 style={{
@@ -3076,7 +3083,7 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
             </div>
             <div className="space-y-2">
               {[
-                { id: 'demo-player-001', name: 'Comandante Norte',  color: '#f43f5e' },
+                { id: 'demo-player-001', name: getNorteName(), color: '#f43f5e', isMe: true },
                 { id: 'demo-player-002', name: 'Comandante Sur',    color: '#facc15' },
                 { id: 'demo-player-003', name: 'Comandante Este',   color: '#06b6d4' },
                 { id: 'demo-player-004', name: 'Comandante Oeste',  color: '#a855f7' },
@@ -3311,6 +3318,53 @@ function DiceRollPanel({ result }) {
 // ─────────────────────────────────────────────────────────────
 // TURN BANNER — "Tu turno" when it's your player, otherwise who plays
 // ─────────────────────────────────────────────────────────────
+// ── Nombre personalizado del jugador humano (Norte) ──────────────────────────
+// Se guarda en localStorage para persistir entre sesiones.
+const PLAYER_NAME_KEY = 'cloudrisk_player_name'
+function getNorteName() {
+  return localStorage.getItem(PLAYER_NAME_KEY) || 'Norte'
+}
+
+function NameEditor({ fallback }) {
+  const stored = localStorage.getItem(PLAYER_NAME_KEY)
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(stored || fallback || 'Norte')
+
+  const save = (val) => {
+    const v = val.trim() || fallback || 'Norte'
+    setName(v)
+    localStorage.setItem(PLAYER_NAME_KEY, v)
+    setEditing(false)
+  }
+
+  if (editing) return (
+    <input
+      autoFocus
+      className="font-display font-extrabold text-white text-lg bg-transparent border-b-2 outline-none w-44"
+      style={{ borderColor: '#c8ff00' }}
+      value={name}
+      onChange={e => setName(e.target.value)}
+      onBlur={e => save(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') save(name)
+        if (e.key === 'Escape') setEditing(false)
+      }}
+    />
+  )
+
+  return (
+    <button onClick={() => setEditing(true)} className="flex items-center gap-2 group text-left">
+      <span className="font-display font-extrabold text-white text-lg leading-none">{name}</span>
+      <span
+        className="text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest"
+        style={{ background: 'rgba(200,255,0,0.18)', color: '#c8ff00', border: '1px solid rgba(200,255,0,0.35)' }}
+      >
+        Yo ✏
+      </span>
+    </button>
+  )
+}
+
 function TurnBanner({ myUserId }) {
   const [turn, setTurn] = useState(null)
   useEffect(() => {
@@ -3329,7 +3383,7 @@ function TurnBanner({ myUserId }) {
   if (!turn) return null
   const mine = turn.current_player_id === myUserId
   const names = {
-    'demo-player-001': 'Norte',
+    'demo-player-001': getNorteName(),
     'demo-player-002': 'Sur',
     'demo-player-003': 'Este',
     'demo-player-004': 'Oeste',
@@ -3468,10 +3522,82 @@ function EndTurnButton({ myUserId }) {
 // por llamada, pausa de 4.5 s) hasta que vuelve mi turno. Así se ve:
 //  - El TurnBanner cambiando: "Turno de Sur" → "Turno de Este" → "Turno de Oeste"
 //  - El mapa repintándose entre bot y bot gracias al onRefresh
+// ─────────────────────────────────────────────────────────────
+// Bot action overlay — animated cards for attack / conquer / fortify
+// ─────────────────────────────────────────────────────────────
+const BOT_PLAYER_COLORS = {
+  'demo-player-002': '#facc15',
+  'demo-player-003': '#06b6d4',
+  'demo-player-004': '#a855f7',
+}
+
+function BattleEventOverlay({ events }) {
+  if (!events || events.length === 0) return null
+  const meta = {
+    attack:  { emoji: '⚔️', label: 'ATACA',    glow: '#f43f5e' },
+    conquer: { emoji: '🏴', label: 'CONQUISTA', glow: '#facc15' },
+    fortify: { emoji: '🛡️', label: 'FORTIFICA', glow: '#06b6d4' },
+  }
+  return (
+    <div className="absolute left-4 bottom-36 z-30 flex flex-col gap-2 max-w-[250px] pointer-events-none">
+      <AnimatePresence>
+        {events.map((ev, i) => {
+          const m = meta[ev.action] || { emoji: '•', label: ev.action.toUpperCase(), glow: '#fff' }
+          const botColor = BOT_PLAYER_COLORS[ev.bot] || '#fff'
+          return (
+            <motion.div
+              key={ev._key || `${ev.bot}-${ev.action}-${ev.zone_id}-${i}`}
+              initial={{ opacity: 0, x: -50, scale: 0.85 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: -50, scale: 0.85 }}
+              transition={{ type: 'spring', damping: 22, stiffness: 260, delay: i * 0.1 }}
+              className="rounded-2xl px-3 py-2.5 backdrop-blur-xl border"
+              style={{
+                background: `${m.glow}14`,
+                borderColor: `${m.glow}50`,
+                boxShadow: `0 0 18px ${m.glow}22`,
+              }}
+            >
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: botColor }} />
+                <span className="font-bold text-[10px] uppercase tracking-widest" style={{ color: botColor }}>
+                  {ev.botName}
+                </span>
+                <span className="ml-auto text-[10px] font-black px-1.5 py-0.5 rounded-full"
+                  style={{ background: `${m.glow}22`, color: m.glow }}>
+                  {m.emoji} {m.label}
+                </span>
+              </div>
+              {ev.action === 'attack' && (
+                <div className="text-[11px] leading-snug">
+                  {ev.from_zone_name && <span className="text-white/55">{ev.from_zone_name} </span>}
+                  <span className="text-white/35">→ </span>
+                  <span className="font-bold" style={{ color: m.glow }}>{ev.zone_name}</span>
+                </div>
+              )}
+              {ev.action === 'conquer' && (
+                <div className="text-[11px] font-bold" style={{ color: m.glow }}>{ev.zone_name}</div>
+              )}
+              {ev.action === 'fortify' && (
+                <div className="text-[11px]">
+                  <span className="text-white/55">{ev.zone_name}</span>
+                  {ev.prev_defense != null && ev.new_defense != null && (
+                    <span className="text-white/35"> {ev.prev_defense}→{ev.new_defense}</span>
+                  )}
+                </div>
+              )}
+            </motion.div>
+          )
+        })}
+      </AnimatePresence>
+    </div>
+  )
+}
+
 //  - Resumen de lo que hizo el bot (qué conquistó / atacó / fortificó)
 // En total ~14 s para los 3 bots — Fran dijo "hazlos más lentos para
 // percatarme" así que cadencia cómoda > velocidad.
-function SimulateBotsButton({ myUserId, onRefresh }) {
+function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
   const [turn, setTurn] = useState(null)
   const [playing, setPlaying] = useState(false)
   const [step, setStep] = useState(0)
@@ -3491,8 +3617,8 @@ function SimulateBotsButton({ myUserId, onRefresh }) {
   }, [])
 
   const names = {
-    'demo-player-001': 'Norte', 'demo-player-002': 'Sur',
-    'demo-player-003': 'Este',  'demo-player-004': 'Oeste',
+    'demo-player-001': getNorteName(), 'demo-player-002': 'Sur',
+    'demo-player-003': 'Este',         'demo-player-004': 'Oeste',
   }
   const isMyTurn = turn && turn.current_player_id === myUserId
 
@@ -3510,7 +3636,7 @@ function SimulateBotsButton({ myUserId, onRefresh }) {
         const botName = names[curr.current_player_id] || 'bot'
         setCurrentBot(botName)
         setStep(i + 1)
-        const simRes = await api.post('/api/v1/simulate_bots/run', { mode: 'step', actions_per_bot_turn: 3 })
+        const simRes = await api.post('/api/v1/simulate_bots/run', { mode: 'step', actions_per_bot_turn: 15 })
         await onRefresh?.()
         // Monto el "X conquistó N, atacó N, fortificó N" del summary del
         // backend para que se vea durante la pausa de 4.5 s.
@@ -3523,7 +3649,14 @@ function SimulateBotsButton({ myUserId, onRefresh }) {
           if (s.fortify) parts.push(`${s.fortify} fort.`)
           setLastSummary({ bot: botName, text: parts.join(' · ') || 'sin acciones' })
         }
-        await sleep(4500)
+        // Emit overlay events for ALL non-idle actions (attack, conquer, fortify)
+        if (played?.actions) {
+          const evs = played.actions
+            .filter(a => a.action !== 'idle')
+            .map((a, idx) => ({ ...a, botName, bot: played.bot, _key: `${Date.now()}-${idx}` }))
+          if (evs.length > 0) onBattleEvents?.(evs)
+        }
+        await sleep(8000)
       }
     } catch (e) {
       if (import.meta.env.DEV) console.warn('[simulate bots]', e?.message || e)
@@ -3534,6 +3667,26 @@ function SimulateBotsButton({ myUserId, onRefresh }) {
       try { await onRefresh?.() } catch { /* ignore */ }
     }
   }
+
+  // Siempre apunta a la versión más reciente de run y playing sin
+  // añadirlos como dependencias en el efecto de auto-disparo.
+  const runRef = useRef(run)
+  runRef.current = run
+  const playingRef = useRef(playing)
+  playingRef.current = playing
+
+  // Auto-disparo: solo cuando isMyTurn pasa de true → false (el usuario
+  // acaba de terminar su turno). Evita el bug de mount donde isMyTurn=false
+  // (null inicial) disparaba los bots nada más cargar el mapa.
+  const prevIsMyTurnRef = useRef(null)
+  useEffect(() => {
+    const prev = prevIsMyTurnRef.current
+    prevIsMyTurnRef.current = isMyTurn
+    if (prev !== true || isMyTurn !== false) return
+    if (playingRef.current) return
+    const t = setTimeout(() => runRef.current(), 1200)
+    return () => clearTimeout(t)
+  }, [isMyTurn])
 
   // Estado: oculto mientras no sé de quién es el turno. Si es mi turno
   // deshabilito con texto claro; si no, habilito para que corran los bots.
@@ -3610,9 +3763,11 @@ function EnvironmentBanner() {
 // ─────────────────────────────────────────────────────────────
 // MAP VIEW with real GeoJSON — Phase 2 redesign
 // ─────────────────────────────────────────────────────────────
-function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = [], battles = [], wsStatus = 'idle', sendWs }) {
+function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = [], battles = [], battleHistory = [], wsStatus = 'idle', sendWs }) {
   const [selected, setSelected] = useState(null)
   const [actionPanel, setActionPanel] = useState(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [battleEvents, setBattleEvents] = useState([])
   const [mapRefreshKey, setMapRefreshKey] = useState(0)
   const [runMode, setRunMode] = useState(false)
   const [viewMode, setViewMode] = useState('control') // 'control' | 'pressure' | 'economy'
@@ -3859,7 +4014,27 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
           <TurnBanner myUserId={currentUserId} />
           <EnvironmentBanner />
           <EndTurnButton myUserId={currentUserId} />
-          <SimulateBotsButton myUserId={currentUserId} onRefresh={refreshData} />
+          <SimulateBotsButton myUserId={currentUserId} onRefresh={refreshData} onBattleEvents={setBattleEvents} />
+
+          {/* Botón historial de batallas */}
+          <motion.button
+            whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+            onClick={() => setShowHistory(h => !h)}
+            className={`flex items-center gap-2 px-4 py-3 rounded-2xl backdrop-blur-xl border font-bold text-sm transition-colors ${
+              showHistory
+                ? 'border-yellow-400/60 bg-yellow-400/15 text-yellow-300'
+                : 'border-white/10 bg-black/70 text-white/60 hover:text-white/90'
+            }`}
+          >
+            <ScrollText className="w-4 h-4" />
+            Historial
+            {battleHistory.length > 0 && (
+              <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full"
+                style={{ background: 'rgba(200,255,0,0.2)', color: '#c8ff00' }}>
+                {battleHistory.length}
+              </span>
+            )}
+          </motion.button>
         </div>
 
         {/* Legend + WS indicator.
@@ -3996,6 +4171,86 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
       {/* Botón "Centrar en mis zonas" — React overlay posicionado fuera del
           HUD (right-4 top-24) para que nunca lo tape el HUD ni se pierda al
           hacer responsive. Llama a la acción imperativa que expone NeonMap. */}
+      {/* ── Panel historial de batallas ── */}
+      <AnimatePresence>
+        {showHistory && (
+          <motion.div
+            key="history-panel"
+            initial={{ opacity: 0, x: 40 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 40 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+            className="absolute top-20 right-4 z-40 w-80 max-h-[70vh] flex flex-col rounded-2xl border overflow-hidden"
+            style={{ background: 'rgba(6,7,16,0.92)', borderColor: 'rgba(200,255,0,0.2)', backdropFilter: 'blur(20px)' }}
+          >
+            {/* Header */}
+            <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: 'rgba(200,255,0,0.15)' }}>
+              <ScrollText className="w-4 h-4 flex-shrink-0" style={{ color: '#c8ff00' }} />
+              <span className="font-display font-bold text-white text-xs uppercase tracking-widest flex-1">
+                Historial de Batallas
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full mr-1"
+                style={{ background: 'rgba(200,255,0,0.15)', color: '#c8ff00' }}>
+                {battleHistory.length}
+              </span>
+              <button onClick={() => setShowHistory(false)}
+                className="text-white/40 hover:text-white transition">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Lista */}
+            <div className="overflow-y-auto flex-1 px-3 py-3 space-y-2">
+              {battleHistory.length === 0 ? (
+                <div className="text-xs text-white/30 text-center py-6">Sin batallas registradas aún</div>
+              ) : battleHistory.map(b => {
+                const isAttacker = b.attacker_clan_id === currentUserId || b.attacker_clan_id === currentClanId
+                const won = (isAttacker && b.result === 'attacker_wins') || (!isAttacker && b.result === 'defender_wins')
+                const ongoing = b.result === 'ongoing'
+                const label = ongoing ? '⚔ En curso' : won ? '✓ Victoria' : '✗ Derrota'
+                const labelColor = won ? '#c8ff00' : ongoing ? '#c8ff00' : 'rgba(255,255,255,0.4)'
+                const date = b.started_at
+                  ? new Date(b.started_at).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                  : ''
+                return (
+                  <div key={b.id}
+                    className={`rounded-xl px-3 py-2.5 border transition ${!won && !ongoing ? 'opacity-55' : ''}`}
+                    style={{ background: 'rgba(200,255,0,0.03)', borderColor: 'rgba(200,255,0,0.12)' }}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest flex-shrink-0"
+                        style={{ color: labelColor }}>{label}</span>
+                      <span className="flex-1 text-xs text-white truncate font-medium">
+                        {b.zone_name || 'Zona desconocida'}
+                      </span>
+                      <span className="text-[9px] text-white/30 flex-shrink-0">{date}</span>
+                    </div>
+                    {b.attacker_rolls?.length > 0 && (
+                      <div className="mt-1.5 flex items-center gap-2 text-[10px]">
+                        <span className="text-white/50">Atk</span>
+                        <span className="font-bold" style={{ color: '#c8ff00' }}>
+                          [{b.attacker_rolls.join(', ')}]
+                        </span>
+                        <span className="text-white/30">vs</span>
+                        <span className="text-white/50">Def</span>
+                        <span className="font-bold text-white/70">
+                          [{(b.defender_rolls || []).join(', ')}]
+                        </span>
+                        <span className="ml-auto text-[9px]" style={{ color: won ? '#c8ff00' : 'rgba(255,255,255,0.35)' }}>
+                          {won ? `−${b.attacker_losses ?? 0} nuestros` : `−${b.attacker_losses ?? 0} nuestros`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Bot action overlay ── */}
+      <BattleEventOverlay events={battleEvents} />
+
       <motion.button
         type="button"
         whileHover={{ scale: 1.08 }}
@@ -4144,6 +4399,21 @@ export default function UrbanPacer() {
   }, [token, setUser, pushToast])
   useEffect(() => { refreshDataRef.current = refreshData }, [refreshData])
 
+  // Refresca el historial de batallas cada 15 s sin relanzar el fetch completo
+  useEffect(() => {
+    if (!token) return
+    const poll = async () => {
+      const clanId = user?.clan_id
+      if (!clanId) return
+      try {
+        const r = await api.get('/api/v1/battles/history')
+        if (Array.isArray(r.data)) setBattleHistory(r.data)
+      } catch {}
+    }
+    const id = setInterval(poll, 15000)
+    return () => clearInterval(id)
+  }, [token, user?.clan_id])
+
   // #1 — WebSocket cableado como invalidador del estado global
   const handleWsMessage = useCallback((msg) => {
     if (!msg?.event) return
@@ -4271,6 +4541,7 @@ export default function UrbanPacer() {
             refreshData={refreshData}
             zones={zones}
             battles={battles}
+            battleHistory={battleHistory}
             wsStatus={wsStatus}
             sendWs={sendWs}
           />

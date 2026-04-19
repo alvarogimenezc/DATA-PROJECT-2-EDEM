@@ -19,7 +19,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from cloudrisk_api.endpoints import (
     analiticas as analytics,
     ejercitos as armies,
-    batallas as battles,
     clanes as clans,
     misiones as missions,
     multiplicadores as multipliers,
@@ -74,7 +73,6 @@ app.add_middleware(
 app.include_router(prefix=api_router.prefix, router=users.router)
 app.include_router(prefix=api_router.prefix, router=clans.router)
 app.include_router(prefix=api_router.prefix, router=zones.router)
-app.include_router(prefix=api_router.prefix, router=battles.router)
 app.include_router(prefix=api_router.prefix, router=steps.router)
 app.include_router(prefix=api_router.prefix, router=armies.router)
 app.include_router(prefix=api_router.prefix, router=multipliers.router)
