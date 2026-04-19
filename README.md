@@ -55,17 +55,44 @@ Explicar las 4 tablas, para que sirve cada una, estructura de datos. Por que esc
 
 ---
 
-## 6. Arranque rápido en local
+## 6. Arranque en local
+El arranque local supone levantar la arquitectura mediante contenedores de docker locales y scripts de python en nuestro propio ordenador. Para ello usamos imagenes oficiales de Pub/Sub y Firestore para simular en local esos servicios de GCP. Mediante el despliegue en local somos capaces de testear la arquitectura y desarrollar el proyecto de forma cómoda y sin levantar recursos reales en el proyecto de GCP que suponen un coste. La estructura del repositorio está diseñada para poder levantarse en local o en nube indistintamente. 
 
-Fran explica que es esto y como funciona, con sus palabras. Solo explicamos 1 forma de arrancar, la mas sencilla:
+Pasos para arrancar la arquitectura en local: 
 
----
+*Terminal 1 — Docker*
+Levantamos los contenedores de Pub/Sub, IFrestore, APIS y fronted: 
 
-### ¿Qué es el arranque en local?
+docker compose up -d --build
 
-El arranque en local es cuando nosotros levantamos el proyecto que llamamos "CloudRisk" sin tocar ninguna opcion de Google Cloud Platform, en este caso en vez de conectarnos a FireStore o Pub/Sub reales, lo hacemos en emuladores oficiales de Google dentro de nuestros contenedores de Docker.
+*Terminal 2 — Crear topics en el emulador (una sola vez)*
+El contendor de Pub/Sub está vacío, tenemos que crear los tópicos y suscripciones de manera manual: 
 
-¿Por que? ... Porque asi cualquierra del equipo puede arrancar el proyecto sin la necesidad de tener un cuenta de google cloud, ni configurar nada, ni pagar nada.
+export PUBSUB_EMULATOR_HOST="localhost:8085"
+pip install google-cloud-pubsub
+python scripts/setup_local_pubsub.py
+
+*Terminal 3 — Pipeline Apache Beam (queda corriendo)*
+Apache BEAM es un script que se ejecuta en nuestro ordenador (el pipeline), tenemos que levantarlo a mano: 
+
+export PUBSUB_EMULATOR_HOST="localhost:8085"
+export FIRESTORE_EMULATOR_HOST="localhost:8200"
+pip install -r pipelines/requirements.txt
+python pipelines/cloudrisk_unified.py `
+    --runner=DirectRunner `
+    --project=cloudrisk-local `
+    --player_sub=projects/cloudrisk-local/subscriptions/player-movements-sub `
+    --weather_sub=projects/cloudrisk-local/subscriptions/weather-sub `
+    --airq_sub=projects/cloudrisk-local/subscriptions/air-quality-sub `
+    --local --streaming
+
+*Terminal 4 — Walker / simulador de pasos (genera datos)*
+Ejecutamos el generador de pasos: 
+
+export PUBSUB_EMULATOR_HOST="localhost:8085"
+export PUBSUB_PROJECT="cloudrisk-local"
+pip install -r data_generator/requirements.txt
+python data_generator/juego_caminante.py --moves 50 --pause 0.5
 
 ---
 
