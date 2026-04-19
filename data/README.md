@@ -1,30 +1,47 @@
-# data/
+# 📂 data/ — Semillas y Archivos de Guardado (Data Seeding)
 
-## 🎯 Qué hace este directorio
+Aquí tenemos **datos estáticos en formato JSON**. No es código ejecutable, solo archivos que necesitan los demás programas para funcionar.
 
-Carpeta de **datos estáticos en JSON**. No hay código ejecutable aquí — solo ficheros que otros scripts leen para arrancar la demo, pasar tests offline o mapear usuarios externos a jugadores de CloudRISK.
+Funciona como una colección de **"Partidas Guardadas"**. Permite arrancar el juego directamente con jugadores, territorios y estadísticas reales en Google Cloud, sin tener que empezar desde cero cada vez que se borra la base de datos para hacer pruebas.
 
-Piensa en esto como las "semillas" del proyecto: si borras Firestore y corres `scripts/sembrar_demo.py`, los datos que entran vienen de aquí.
+---
 
-## 🛠️ Lenguajes y tecnologías
+##  Explicación de los 4 Archivos
 
-| Tech | Por qué aquí |
-|---|---|
-| **JSON** | Es el formato universal: Python lo lee con `json.load`, JavaScript con `JSON.parse`, Firestore ingiere dict de Python directo. Ningún parser custom, ninguna dependencia. |
-| (nada más) | No hay código. El objetivo es justamente que no haya lógica — solo datos versionados en Git para que cualquier miembro del equipo pueda editarlos en un PR. |
+### 1. `players.json` (Las cuentas de prueba)
+* [cite_start]**¿Qué es?** Los perfiles base de nuestros 4 comandantes de demostración (Norte, Sur, Este y Oeste)[cite: 17, 29, 39, 50].
+* [cite_start]**¿Qué contiene?** Sus credenciales de acceso (la contraseña es `demo1234`), los colores de su clan en formato hexadecimal, su barrio inicial en el mapa y sus recursos de partida nueva (como 10 ejércitos y 500 de oro iniciales)[cite: 19, 20, 21, 22, 24].
+* **¿Quién lo usa?** El backend al arrancar (para guardar en memoria local) y los scripts de sembrado para inyectarlos en Google Firestore.
 
-**Por qué JSON y no YAML/CSV:** los seeds tienen estructuras anidadas (jugadores → zonas → clanes con arrays de coordenadas). YAML es más legible pero genera errores por indentación; CSV no aguanta anidados. JSON es el punto medio: estricto, anidable y lo entiende cualquier herramienta.
+### 2. `demo_game_state.json` (La partida a la mitad)
+* [cite_start]**¿Qué es?** Un estado de juego "precocinado" para que las presentaciones y demos de CloudRISK luzcan espectaculares desde el segundo uno[cite: 78].
+* [cite_start]**¿Qué contiene?** Una partida avanzada en el **Turno 7**[cite: 85], donde los comandantes ya tienen niveles altos. [cite_start]Incluye **38 zonas ya conquistadas** repartidas por Valencia [cite: 154][cite_start], un historial interactivo con 3 batallas recientes [cite: 220, 225, 234, 243] [cite_start]y un registro histórico de clima y calidad del aire para que las gráficas de BigQuery no salgan vacías[cite: 254, 255].
+* **¿Quién lo usa?** El script `sembrar_demo.py` para construir todo este mapa instantáneo en Firestore.
 
-## 📂 Archivos principales
+### 3. `mock_tracker_feed.json` (El paseo simulado)
+* [cite_start]**¿Qué es?** Un archivo para probar el sistema de recolección de pasos del juego sin tener que salir a la calle a caminar realmente para hacer pruebas[cite: 58].
+* [cite_start]**¿Qué contiene?** Los datos GPS falsos de una ruta matutina por Valencia (del Cabañal a la Malvarrosa), simulando una caminata de unos 4.8 km a lo largo de 10 puntos de control[cite: 58, 61, 65, 74].
+* **¿Quién lo usa?** El recolector local (`recolector_pasos_diario.py`) cuando lo ejecutamos en modo de pruebas local (`--local-file`).
 
-| Archivo | Qué hace |
-|---|---|
-| `demo_game_state.json` | Estado "precocinado" de una partida a la mitad: 4 comandantes, 38 zonas conquistadas, 3 batallas en el histórico. Lo aplica `sembrar_demo.py` con `merge=True` (idempotente). |
-| `players.json` | 4 jugadores demo (norte/sur/este/oeste @ cloudrisk.app, pass `demo1234`). Lo usan `sembrar_firestore.py` y el store local del backend cuando `USE_LOCAL_STORE=1`. |
-| `mock_tracker_feed.json` | Feed falso de `random_tracker` con un paseo real por Valencia (Cabañal → Malvarrosa). Lo consume el fetcher en `steps_ingestor/` con `--local-file` para tests sin red. |
-| `random_tracker_mapping.json` | Mapea `username` del tracker externo → `player_id` de CloudRISK. La clave `"*"` es el fallback si un movement llega sin `user`. |
+### 4. `random_tracker_mapping.json` (El traductor de usuarios)
+* [cite_start]**¿Qué es?** Una pequeña agenda o diccionario que conecta nuestra app que cuenta los pasos con la base de datos del juego[cite: 2].
+* [cite_start]**¿Qué contiene?** Asocia los nombres de usuario reales de la pulsera o tracker (ej: "francisco", "noelia") con los identificadores internos del juego (ej: `demo-player-001`, `demo-player-003`)[cite: 5, 8]. [cite_start]También incluye un comodín `"*"` por si nos llega un paso sin nombre asignado[cite: 4].
+* **¿Quién lo usa?** Los scripts de ingestión de pasos, para saber a qué jugador deben sumarle los puntos.
 
-## 🔗 Cómo se conecta con el resto del proyecto
+---
+
+## ⚙️ Cómo inyectar estos datos a Google Cloud
+
+Esta carpeta no se ejecuta por sí sola. Para mandar estos datos a la nube, hay usar los scripts de la carpeta principal. Abre la terminal y ejecuta:
+
+```bash
+# Para mandar la partida completa a Firestore
+python scripts/sembrar_demo.py --project cloudrisk-492619
+
+# Para mandar solo los usuarios iniciales a Firestore
+python scripts/sembrar_firestore.py --project cloudrisk-492619
+
+## Cómo se conecta con el resto del proyecto
 
 ```
 data/demo_game_state.json  ──▶  scripts/sembrar_demo.py  ──▶  Firestore (users, zones, battles, balances)
@@ -58,8 +75,7 @@ python scripts/sembrar_demo.py --project cloudrisk-492619
 python scripts/sembrar_demo.py --project cloudrisk-492619 --dry-run
 ```
 
-**Reglas de oro del equipo:**
 
-- Si editas un JSON aquí, corre `python -m json.tool <fichero>` antes del commit. Un `,` colgado rompe el seed entero y Noelia te va a sacar los ojos.
+
 - Los campos `_comment` dentro de los JSON son documentación — **no los borres**. Los parsers los ignoran.
-- Si añades un jugador nuevo, hazlo en `players.json` **y** en `demo_game_state.json` con el mismo `id` para que todo case.
+- Si se añade un jugador nuevo, se debe hacer en `players.json` **y** en `demo_game_state.json` con el mismo `id` para que todo case.
