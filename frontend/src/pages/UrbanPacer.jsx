@@ -2704,11 +2704,11 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
     }
   }
 
-  // Bug 84 libres: el backend puede devolver más zonas que el GeoJSON (49 distritos reales).
-  // Mostramos siempre sobre base 49 para que el número sea coherente con el mapa.
-  const TOTAL_DISTRICTS = 49
+  // Contadores del HUD: usamos el total real de zonas del backend (86 en v3)
+  // en vez del cap artificial de 49 que teníamos antes — con setup inicial
+  // hay 60 ocupadas (15×4) y el cap dejaba LIBRES en 0 por el max(0, 49-60).
   const conquered = zones.filter(z => z.owner_clan_id).length
-  const unclaimed = Math.max(0, TOTAL_DISTRICTS - conquered)
+  const unclaimed = zones.filter(z => !z.owner_clan_id).length
   const xpPct = Math.min(100, (player.power_points / 1000) * 100)
 
   // Zapatilla — desgaste. El desgaste se comunica por LUMINANCIA, no por
@@ -3011,7 +3011,8 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
 
             {/* Botón "Simular bots" — dispara /simulate_bots/run y refresca
                 zonas para que el mapa muestre las conquistas de los 3 bots
-                contrarios al jugador. */}
+                contrarios al jugador. El setup inicial (15 zonas/jugador +
+                30 pool) lo hace automáticamente el backend al arrancar. */}
             <button
               type="button"
               onClick={handleSimulateBots}

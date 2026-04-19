@@ -343,6 +343,85 @@ def _apply_zone_assignments(
         })
 
 
+def _run_setup() -> dict:
+    """Núcleo del setup — idempotente, sin auth. Devuelve el mismo dict que
+    el endpoint. Reutilizable desde:
+      - `POST /turn/setup` (trigger manual / scheduler).
+      - `ensure_game_setup()` (auto-arranque del backend en local).
+
+    Raises `RuntimeError` si no hay zonas sembradas o hay menos de 10 con
+    geojson — el llamador decide si convertirlo en 500 o en log+skip.
+    """
+    zones = zonas_repo.list_zones()
+    if not zones:
+        raise RuntimeError("No zones seeded")
+
+    zones_with_centroid = _compute_zones_with_centroid(zones)
+    if len(zones_with_centroid) < 10:
+        raise RuntimeError(
+            f"Too few zones with geojson to cluster ({len(zones_with_centroid)})"
+        )
+
+    rng = random.Random()
+    seeds = _pick_four_spread_seeds(zones_with_centroid, rng)
+    order = game_state.DEFAULT_PLAYER_ORDER
+    seed_owners = dict(zip(order, seeds))
+
+    assignments, taken = _assign_zones_to_players(zones_with_centroid, seeds, order)
+
+    all_cluster_ids = {z["id"] for z, _ in zones_with_centroid}
+    all_db_ids = {z["id"] for z in zones}
+    free_in_cluster = all_cluster_ids - taken
+    free_no_geo = all_db_ids - all_cluster_ids
+    free_ids = free_in_cluster | free_no_geo
+
+    _apply_zone_assignments(assignments, free_ids)
+
+    for pid in order:
+        usuarios_repo.update_user(pid, {"power_points": STARTING_POOL})
+
+    game_state.reset()
+
+    return {
+        "status": "ok",
+        "rule": "CloudRISK v3 · Clustered Risk — territorios cercanos + zonas libres",
+        "setup": {
+            "zones_per_player": {p: len(v) for p, v in assignments.items()},
+            "free_zones_total": len(free_ids),
+            "free_by_cluster_miss": len(free_in_cluster),
+            "free_by_no_geojson":   len(free_no_geo),
+            "total_zones_in_db":     len(zones),
+            "armies_per_owned_zone": MIN_ARMIES_PER_ZONE,
+            "starting_pool_per_player": STARTING_POOL,
+            "seeds": {p: seed_owners[p]["id"] for p in order},
+        },
+        "per_turn_formula": {
+            "zone_bonus": f"max({MIN_TURN_BONUS}, zones/{ZONES_PER_BONUS})",
+            "step_bonus": f"floor(steps / {settings.POWER_PER_STEPS})",
+        },
+        "starts": order[0],
+        "phase": "reinforce",
+    }
+
+
+def ensure_game_setup() -> dict | None:
+    """Dispara el setup si detecta que la partida está 'cruda' (ninguna zona
+    tiene owner). Pensado para llamarse una vez al arrancar el backend en
+    local — en prod el scheduler tiene su propio trigger vía /turn/setup.
+    Devuelve el resultado del setup si lo ejecutó, `None` si ya estaba listo.
+    """
+    try:
+        zones = zonas_repo.list_zones()
+        if any(z.get("owner_clan_id") for z in zones):
+            return None
+        return _run_setup()
+    except Exception as e:
+        # El seed de zonas puede llegar milisegundos después si hay carrera
+        # entre el lifespan y la primera request; no queremos tumbar el API.
+        print(f"[SETUP] Auto-setup skipped: {e}")
+        return None
+
+
 @router.post("/setup", tags=["setup"])
 def setup_game(
     x_scheduler_token: Optional[str] = Header(None, alias="X-Scheduler-Token"),
@@ -373,66 +452,9 @@ def setup_game(
     X-Scheduler-Token (Cloud Scheduler / ops) para evitar que cualquier
     jugador autenticado resetee la partida en demo/producción.
     """
-    # En prod: se requiere el token de ops además del usuario logueado.
-    # En local: permitimos cualquier usuario autenticado para que los
-    # scripts de data_generator y los tests sigan funcionando sin token.
     if not USE_LOCAL and x_scheduler_token != settings.SCHEDULER_SECRET:
         raise HTTPException(status_code=403, detail="Forbidden: scheduler token required")
-    zones = zonas_repo.list_zones()
-    if not zones:
-        raise HTTPException(status_code=500, detail="No zones seeded")
-
-    # Pasos 1+2 — centroides y semillas.
-    zones_with_centroid = _compute_zones_with_centroid(zones)
-    if len(zones_with_centroid) < 10:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Too few zones with geojson to cluster ({len(zones_with_centroid)})",
-        )
-
-    rng = random.Random()
-    seeds = _pick_four_spread_seeds(zones_with_centroid, rng)
-    order = game_state.DEFAULT_PLAYER_ORDER
-    seed_owners = dict(zip(order, seeds))
-
-    # Paso 3 — clustering greedy round-robin por cercanía a semilla.
-    assignments, taken = _assign_zones_to_players(zones_with_centroid, seeds, order)
-
-    # Conjuntos derivados: las zonas SIN geojson y las que quedaron fuera del
-    # round-robin se marcan ambas como libres (cualquiera las puede reclamar).
-    all_cluster_ids = {z["id"] for z, _ in zones_with_centroid}
-    all_db_ids = {z["id"] for z in zones}
-    free_in_cluster = all_cluster_ids - taken
-    free_no_geo = all_db_ids - all_cluster_ids
-    free_ids = free_in_cluster | free_no_geo
-
-    # Paso 4 — persistir asignaciones y zonas libres.
-    _apply_zone_assignments(assignments, free_ids)
-
-    # Paso 5 — pool inicial de armies para cada jugador.
-    for pid in order:
-        usuarios_repo.update_user(pid, {"power_points": STARTING_POOL})
-
-    # Paso 6 — reset del estado de turno (Norte arranca, fase reinforce).
-    game_state.reset()
-
-    return {
-        "status": "ok",
-        "rule": "CloudRISK v3 · Clustered Risk — territorios cercanos + zonas libres",
-        "setup": {
-            "zones_per_player": {p: len(v) for p, v in assignments.items()},
-            "free_zones_total": len(free_ids),
-            "free_by_cluster_miss": len(free_in_cluster),
-            "free_by_no_geojson":   len(free_no_geo),
-            "total_zones_in_db":     len(zones),
-            "armies_per_owned_zone": MIN_ARMIES_PER_ZONE,
-            "starting_pool_per_player": STARTING_POOL,
-            "seeds": {p: seed_owners[p]["id"] for p in order},
-        },
-        "per_turn_formula": {
-            "zone_bonus": f"max({MIN_TURN_BONUS}, zones/{ZONES_PER_BONUS})",
-            "step_bonus": f"floor(steps / {settings.POWER_PER_STEPS})",
-        },
-        "starts": order[0],
-        "phase": "reinforce",
-    }
+    try:
+        return _run_setup()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
