@@ -2681,6 +2681,28 @@ function RunningTipsCarousel() {
 function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onLogout, clans, zones, battles, onRefresh, loading = false, wsStatus = 'idle', missions = [], battleHistory = [], leaderboard = [], onClaimMission, onReopenTutorial }) {
   const [claimReward, setClaimReward] = useState(null)
   const [burst, setBurst] = useState([])
+  const [simulating, setSimulating] = useState(false)
+  const [lastSimResult, setLastSimResult] = useState(null)
+
+  // Dispara una ronda de acciones de los 3 bots contrarios. Endpoint
+  // `/simulate_bots/run` persiste los cambios en zonas (conquer/attack/
+  // fortify) y onRefresh() los trae al mapa.
+  const handleSimulateBots = async () => {
+    if (simulating) return
+    setSimulating(true)
+    try {
+      const { data } = await api.post('/api/v1/simulate_bots/run', { rounds: 2 })
+      setLastSimResult(data)
+      await onRefresh?.()
+      setTimeout(() => setLastSimResult(null), 6000)
+    } catch (err) {
+      const msg = err?.response?.data?.detail || err.message || 'Error desconocido'
+      setLastSimResult({ error: msg })
+      setTimeout(() => setLastSimResult(null), 6000)
+    } finally {
+      setSimulating(false)
+    }
+  }
 
   // Bug 84 libres: el backend puede devolver más zonas que el GeoJSON (49 distritos reales).
   // Mostramos siempre sobre base 49 para que el número sea coherente con el mapa.
@@ -2986,6 +3008,43 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
                 </div>
               ))}
             </div>
+
+            {/* Botón "Simular bots" — dispara /simulate_bots/run y refresca
+                zonas para que el mapa muestre las conquistas de los 3 bots
+                contrarios al jugador. */}
+            <button
+              type="button"
+              onClick={handleSimulateBots}
+              disabled={simulating}
+              className="mt-3 w-full rounded-xl border border-neon-lime/40 px-3 py-2 text-[10px] font-display font-bold uppercase tracking-widest transition-all disabled:opacity-50"
+              style={{
+                background: simulating ? 'rgba(200,255,0,0.08)' : 'rgba(200,255,0,0.14)',
+                color: '#c8ff00',
+                boxShadow: simulating ? 'none' : '0 0 12px rgba(200,255,0,0.15)',
+              }}
+            >
+              {simulating ? 'Simulando…' : '🤖 Simular bots (2 rondas)'}
+            </button>
+
+            {lastSimResult && (
+              <div
+                className="mt-2 rounded-lg border border-white/10 px-2 py-1.5 text-[10px] text-white/80"
+                style={{ background: 'rgba(0,0,0,0.35)' }}
+              >
+                {lastSimResult.error ? (
+                  <span className="text-red-400">⚠ {lastSimResult.error}</span>
+                ) : (
+                  <span>
+                    ✓ {lastSimResult.total_actions} acciones en {lastSimResult.rounds} rondas —
+                    {' '}
+                    {Object.entries(lastSimResult.summary || {}).map(([bot, counts]) => {
+                      const short = bot.replace('demo-player-', '#')
+                      return `${short}: ${counts.conquer}c/${counts.attack}a/${counts.fortify}f`
+                    }).join(' · ')}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Misiones (mini-card del lobby — versión corta) — brand palette */}

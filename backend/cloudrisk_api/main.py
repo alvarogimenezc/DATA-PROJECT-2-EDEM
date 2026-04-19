@@ -28,6 +28,7 @@ from cloudrisk_api.endpoints import (
     turno as turn,
     usuarios as users,
     zonas as zones,
+    simulador as simulation,
 )
 from cloudrisk_api.services.gestor_websocket import ConnectionManager
 
@@ -81,6 +82,7 @@ app.include_router(prefix=api_router.prefix, router=turn.router)
 app.include_router(prefix=api_router.prefix, router=team_compat.router)
 app.include_router(prefix=api_router.prefix, router=missions.router)
 app.include_router(prefix=api_router.prefix, router=analytics.router)
+app.include_router(prefix=api_router.prefix, router=simulation.router)
 
 
 def _seed_zones_firestore() -> None:

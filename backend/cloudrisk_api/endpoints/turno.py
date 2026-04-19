@@ -361,8 +361,9 @@ def setup_game(
            defense_level=0).
         4. Coloca MIN_ARMIES_PER_ZONE armies en cada zona asignada.
            Las libres se quedan a 0 armies (se reclaman con /actions/place).
-        5. Cada jugador recibe STARTING_POOL (20) armies como power_points
+        5. Cada jugador recibe STARTING_POOL (30) armies como power_points
            para desplegar donde quiera (reforzar o reclamar zonas libres).
+           15 zonas × 2 tropas + 30 pool = 60 armies iniciales por jugador.
         6. Resetea el turno: Norte, fase reinforce, turno 1.
 
     Resultado: ~60 zonas repartidas (15 por jugador, clusterizadas) +
