@@ -505,13 +505,18 @@ def build_pipeline(opts):
         env_rows = env_parsed.rows
         env_dlq = env_parsed[ParseEnvironment.DLQ]
 
-        env_rows | "WriteEnvBQ" >> beam.io.WriteToBigQuery(
-            opts.env_table,
-            schema=ENV_SCHEMA,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-            method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
-        )
+        if getattr(opts, 'local', False):
+            env_rows | "LogEnvLocal" >> beam.Map(
+                lambda r: logging.info("[ENV] type=%s mult=%.3f", r.get("type"), r.get("multiplier", 0))
+            )
+        else:
+            env_rows | "WriteEnvBQ" >> beam.io.WriteToBigQuery(
+                opts.env_table,
+                schema=ENV_SCHEMA,
+                create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
+            )
 
         # Side input: un único float con el producto aire×clima más reciente,
         # actualizado en ventanas globales con triggers repetidos cada 30s.
@@ -556,26 +561,37 @@ def build_pipeline(opts):
         firestore_written = scoring_rows | "WriteFirestore" >> beam.ParDo(WriteFirestoreDoFn())
 
         # Sink 2: BigQuery scoring histórico
-        firestore_written | "WriteScoringBQ" >> beam.io.WriteToBigQuery(
-            opts.scoring_table,
-            schema=SCORING_SCHEMA,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-            method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
-        )
+        if getattr(opts, 'local', False):
+            firestore_written | "LogScoringLocal" >> beam.Map(
+                lambda r: logging.info("[SCORING] player=%s steps=%s armies=%s",
+                                       r.get("player_id"), r.get("steps_delta"), r.get("armies_earned"))
+            )
+        else:
+            firestore_written | "WriteScoringBQ" >> beam.io.WriteToBigQuery(
+                opts.scoring_table,
+                schema=SCORING_SCHEMA,
+                create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
+            )
 
         # ── Rama DLQ (todos los orígenes → una sola tabla) ─────────────────
         all_dlq = (env_dlq, player_dlq, scoring_dlq) | "MergeDLQ" >> beam.Flatten()
-        all_dlq | "WriteDLQ" >> beam.io.WriteToBigQuery(
-            opts.dlq_table,
-            schema=DLQ_SCHEMA,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-            method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
-        )
-        all_dlq | "LogDLQ" >> beam.Map(
-            lambda r: logging.warning("[DLQ] %s: %s", r.get("source"), r.get("reason"))
-        )
+        if getattr(opts, 'local', False):
+            all_dlq | "LogDLQLocal" >> beam.Map(
+                lambda r: logging.warning("[DLQ] %s: %s — %s", r.get("source"), r.get("reason"), r.get("player_id"))
+            )
+        else:
+            all_dlq | "WriteDLQ" >> beam.io.WriteToBigQuery(
+                opts.dlq_table,
+                schema=DLQ_SCHEMA,
+                create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
+            )
+            all_dlq | "LogDLQ" >> beam.Map(
+                lambda r: logging.warning("[DLQ] %s: %s", r.get("source"), r.get("reason"))
+            )
 
 
 def main():
@@ -593,17 +609,19 @@ def main():
     parser.add_argument("--weather_sub", required=True)
     parser.add_argument("--airq_sub", required=True)
 
-    parser.add_argument("--scoring_table", required=True,
+    parser.add_argument("--scoring_table", default="unused",
                         help="BQ table project:dataset.player_scoring_events")
-    parser.add_argument("--env_table", required=True,
+    parser.add_argument("--env_table", default="unused",
                         help="BQ table project:dataset.environmental_factors")
-    parser.add_argument("--dlq_table", required=True,
+    parser.add_argument("--dlq_table", default="unused",
                         help="BQ table project:dataset.dead_letter")
 
     parser.add_argument("--max_speed_kmh", type=float, default=DEFAULT_MAX_SPEED_KMH)
     parser.add_argument("--power_per_steps", type=int, default=DEFAULT_POWER_PER_STEPS)
     parser.add_argument("--daily_army_cap", type=int, default=DEFAULT_DAILY_ARMY_CAP)
     parser.add_argument("--daily_steps_cap", type=int, default=DEFAULT_DAILY_STEPS_CAP)
+    parser.add_argument("--local", action="store_true",
+                        help="Skip BigQuery sinks (no BQ emulator). Logs output instead.")
 
     args, _ = parser.parse_known_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
