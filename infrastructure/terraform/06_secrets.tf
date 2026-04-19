@@ -44,8 +44,8 @@ resource "google_secret_manager_secret_version" "jwt_secret_v1" {
 }
 
 # --------- SECRET 2: OpenWeatherMap API key --------------------------------
-# Este secreto lo crea Terraform pero el VALOR lo metes a mano con:
-#   gcloud secrets versions add openweather-api-key --data-file=- <<< "TU_KEY"
+# Este secreto lo crea Terraform pero el VALOR real lo metes a mano con:
+#   echo -n "TU_KEY" | gcloud secrets versions add openweather-api-key --data-file=-
 # (porque OWM requiere registro humano y no queremos la key en tfvars)
 resource "google_secret_manager_secret" "owm_api_key" {
   secret_id = "openweather-api-key"
@@ -60,6 +60,22 @@ resource "google_secret_manager_secret" "owm_api_key" {
   }
 
   depends_on = [google_project_service.apis]
+}
+
+# Version placeholder: sin esta version los Cloud Run services `air-ingestor`
+# y `weather-ingestor` no arrancan (no pueden resolver `version = "latest"`).
+# Cuando Alvaro meta la key real con `gcloud secrets versions add`, se crea la
+# version 2 y Cloud Run la lee automaticamente (porque lee `latest`).
+# `ignore_changes` evita que Terraform reemplace la version 2 real en proximos
+# applies (en ese caso si un miembro del equipo re-aplica terraform, no
+# machaca la key real con el placeholder).
+resource "google_secret_manager_secret_version" "owm_api_key_placeholder" {
+  secret      = google_secret_manager_secret.owm_api_key.id
+  secret_data = "PLACEHOLDER-cambiame-con-gcloud-secrets-versions-add"
+
+  lifecycle {
+    ignore_changes = [secret_data]
+  }
 }
 
 # --------- SECRET 3: Scheduler token ---------------------------------------

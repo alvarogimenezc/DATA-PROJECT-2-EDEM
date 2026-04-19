@@ -16,12 +16,12 @@
 # └─────────────────────────────────────────────────────────────────────────┘
 
 # --------- JOB 1: Power decay diario --------------------------------------
-# Cron "0 3 * * *" = cada dia a las 3:00 UTC (5:00 hora Espana)
+# Cron "0 3 * * *" = cada dia a las 03:00 Europe/Madrid (hora local)
 resource "google_cloud_scheduler_job" "power_decay" {
   name        = "cloudrisk-power-decay"
   description = "Aplica 15% de decay diario al poder de los jugadores"
   schedule    = "0 3 * * *"
-  time_zone   = "UTC"
+  time_zone   = "Europe/Madrid"
 
   # Si el API no responde en 60s se considera fallida y se reintenta
   attempt_deadline = "60s"
@@ -54,7 +54,7 @@ resource "google_cloud_scheduler_job" "resolve_battles" {
   name        = "cloudrisk-resolve-battles"
   description = "Auto-resuelve batallas cuya deadline ha pasado"
   schedule    = "0 * * * *"
-  time_zone   = "UTC"
+  time_zone   = "Europe/Madrid"
 
   attempt_deadline = "60s"
 
