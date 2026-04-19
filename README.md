@@ -14,6 +14,8 @@ Proyecto 100 % **serverless** sobre Google Cloud Platform. Juego de estrategia g
   - 7) Despliegue a GCP
   - 8) Resultados, aprendizajes y mejoras
 
+Terminar una vez tengamos todas las secciones OK. 
+
 ---
 
 ## 1. Qué es CloudRISK
@@ -60,21 +62,24 @@ El arranque local supone levantar la arquitectura mediante contenedores de docke
 
 Pasos para arrancar la arquitectura en local: 
 
-*Terminal 1 — Docker*
+**Terminal 1 — Docker**
+
 Levantamos los contenedores de Pub/Sub, IFrestore, APIS y fronted: 
-
+```bash
 docker compose up -d --build
+```
+**Terminal 2 — Crear topics en el emulador (una sola vez)**
 
-*Terminal 2 — Crear topics en el emulador (una sola vez)*
 El contendor de Pub/Sub está vacío, tenemos que crear los tópicos y suscripciones de manera manual: 
-
+```bash
 export PUBSUB_EMULATOR_HOST="localhost:8085"
 pip install google-cloud-pubsub
 python scripts/setup_local_pubsub.py
+```
+**Terminal 3 — Pipeline Apache Beam (queda corriendo)**
 
-*Terminal 3 — Pipeline Apache Beam (queda corriendo)*
 Apache BEAM es un script que se ejecuta en nuestro ordenador (el pipeline), tenemos que levantarlo a mano: 
-
+```bash
 export PUBSUB_EMULATOR_HOST="localhost:8085"
 export FIRESTORE_EMULATOR_HOST="localhost:8200"
 pip install -r pipelines/requirements.txt
@@ -85,80 +90,17 @@ python pipelines/cloudrisk_unified.py `
     --weather_sub=projects/cloudrisk-local/subscriptions/weather-sub `
     --airq_sub=projects/cloudrisk-local/subscriptions/air-quality-sub `
     --local --streaming
+```
+**Terminal 4 — Walker / simulador de pasos (genera datos)**
 
-*Terminal 4 — Walker / simulador de pasos (genera datos)*
 Ejecutamos el generador de pasos: 
-
+```bash
 export PUBSUB_EMULATOR_HOST="localhost:8085"
 export PUBSUB_PROJECT="cloudrisk-local"
 pip install -r data_generator/requirements.txt
 python data_generator/juego_caminante.py --moves 50 --pause 0.5
-
----
-
-## ¿De donde sale cada cosa que tenemos en local?
-
-### 🔹 Frontend
-
-- Servicio de frontend sale del puerto **3000** que es el puerto que tenemos configurado en el docker compose para el servicio de frontend
-
-#### ¿Cómo se construyó y qué tecnologías se usaron?
-
-React + Vite, el framework que hemos escogido para el desarrollo del frontend de CloudRisk. Es un framework de desarrollo web que nos permite crear aplicaciones web de manera rápida y sencilla, con una gran cantidad de funcionalidades y herramientas integradas. Vite es un framework de desarrollo web moderno que se basa en la idea de "desarrollo rápido", lo que significa que nos permite desarrollar aplicaciones web de manera rápida y eficiente, sin tener que preocuparnos por la configuración y el rendimiento.
-
-#### ¿Qué hay aquí?
-
-- (Mapa, login, /analytics)
-
----
-
-### 🔹 API
-
-- Servicio de API sale del puerto **8080** que es el puerto que tenemos configurado en el docker compose para el servicio de API
-
-#### ¿Con qué tecnologías se construyó?
-
-El servicio de API de CloudRisk se construyó utilizando Python y FastAPI. FastAPI es un framework web moderno y rápido para construir APIs con Python. Es fácil de usar, tiene una gran cantidad de funcionalidades integradas y es muy eficiente en términos de rendimiento. Además, FastAPI es compatible con OpenAPI, lo que nos permite generar documentación automática para nuestra API.
-
-#### ¿Qué hay aquí?
-
-- (Endpoints para el login, el estado del mapa, y el endpoint de analytics)
-
----
-
-### 🔹 Firestore Emulator
-
-- Firestore emulator sale del puerto **8200** que es el puerto que tenemos configurado en el docker compose para el servicio de Firestore emulator
-
-Base de datos en tiempo real (FALSA) que nos permite hacer? Nos permite almacenar y sincronizar datos entre los clientes y el servidor en tiempo real. En nuestro caso, lo usamos para almacenar el estado del juego, las tropas desplegadas, los movimientos de los jugadores, etc. Es una base de datos NoSQL que nos permite trabajar con documentos y colecciones, lo que nos da mucha flexibilidad a la hora de modelar nuestros datos.
-
----
-
-### 🔹 Pub/Sub Emulator
-
-- Pub/Sub emulator sale del puerto **8085** que es el puerto que tenemos configurado en el docker compose para el servicio de Pub/Sub emulator
-
-Sistema de mensajería en tiempo real (FALSO) que nos permite enviar y recibir mensajes entre diferentes partes de nuestra aplicación. En nuestro caso, lo usamos para enviar los pasos que da cada jugador desde el frontend al backend, y para enviar los multiplicadores desde el backend al frontend. Es un sistema de mensajería basado en el modelo de publicación-suscripción, lo que significa que los productores de mensajes (publicadores) envían mensajes a un tema, y los consumidores de mensajes (suscriptores) reciben mensajes de ese tema o topic.
-
----
-
-## Desplegar en local
-
-1. Crear un `.env`  
-2. Ejecutar:
-
-```bash
-docker compose up -d -- build
 ```
-
-### Servicios disponibles
-
-- **Frontend (incl. /analytics)** → http://localhost:3000  
-- **API + Swagger** → http://localhost:8080/api/v1/docs  
-- **Firestore emulator** → localhost:8200  
-- **Pub/Sub emulator** → localhost:8085  
-- **Dataflow** → localhost:8080 (endpoint de Dataflow en local)
-
+---
 
 ## 7. Despliegue a GCP
 
