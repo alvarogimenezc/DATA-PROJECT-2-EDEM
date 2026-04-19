@@ -1,18 +1,5 @@
-"""
-CloudRISK — Weather Ingestor
-Polls OpenWeatherMap for Valencia's weather every 30 seconds and publishes
-a normalised multiplier to Pub/Sub topic `weather`.
-
-Two execution modes:
-    - real:  uses OPENWEATHER_API_KEY (via Secret Manager in Cloud Run)
-    - mock:  generates synthetic weather values when the key is absent
-
-Contract multiplier range: 0.6 (extreme weather) to 1.5 (clear + mild).
-Extra penalty of -0.2 when temperature is outside [5°C, 35°C].
-
-EDEM. Master Big Data & Cloud 2025/2026
-Professor: Javi Briones & Adriana Campos
-"""
+#ingestor automático que comprueba el tiempo en Valencia cada 30 segundos, 
+# calcula una penalización o bonificación según el clima (sol o lluvia) y envía el resultado a Google
 from __future__ import annotations
 
 import json
@@ -24,11 +11,13 @@ from datetime import datetime, timezone
 
 import requests
 
+#Definimos dónde estamos (Valencia) y cada cuanto tiempo trabajaremos (30 segundos)
 LAT = "39.47391"
 LON = "-0.37966"
 CITY = "Valencia"
 INTERVAL_S = int(os.environ.get("INGEST_INTERVAL_SECONDS", "30"))
 
+#Con las variables de entorno busca las contraseñas, si no encuentra la API_KEY, activa automáticamente el modo simulacro (Mock)
 API_KEY = os.environ.get("OPENWEATHER_API_KEY") or os.environ.get("CLAVE_API")
 MOCK = not API_KEY
 
@@ -39,6 +28,9 @@ BACKEND_INGEST_URL = os.environ.get("BACKEND_INGEST_URL")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("weather")
 
+#Lógica del negocio. Clima. 
+#Traduce el clima actual y la temperatura en un multiplicador de puntos (de 0.6 a 1.5) para el juego, 
+# penalizando si hace un calor o frío extremo.
 WEATHER_BASE_MULTIPLIER = {
     "Clear":        1.5,
     "Clouds":       1.2,
@@ -50,21 +42,14 @@ WEATHER_BASE_MULTIPLIER = {
 
 
 def _compute_multiplier(weather_main: str, temp_c: float) -> float:
-    """Mapea (clima, temperatura) a un multiplicador acotado a [0.6, 1.5].
-
-    El base sale de la tabla `WEATHER_BASE_MULTIPLIER`. Aplicamos -0.2
-    si la temperatura está fuera del rango cómodo [5°C, 35°C] (frío extremo
-    o calor extremo desincentivan caminar)."""
     base = WEATHER_BASE_MULTIPLIER.get(weather_main, 1.0)
     if temp_c > 35 or temp_c < 5:
         base -= 0.2
     return round(max(0.6, min(1.5, base)), 3)
 
 
+#Extracción de datos. Se conecta a OpenWeather, se baja el JSON con el clima de Valencia, saca solo la información necesaria y lo devuelve limpio.
 def fetch_real() -> dict:
-    """Llama a la API real de OpenWeatherMap y aplana la respuesta a un dict
-    con sólo los campos que necesitamos. `r.raise_for_status()` deja que el
-    bucle principal lo capture y haga reintento en el siguiente tick."""
     url = (
         "https://api.openweathermap.org/data/2.5/weather"
         f"?lat={LAT}&lon={LON}&appid={API_KEY}&units=metric"
@@ -82,13 +67,8 @@ def fetch_real() -> dict:
         "description": data["weather"][0]["description"],
     }
 
-
+#hace lo mismo pero con datos generados aleatoriamente.
 def fetch_mock() -> dict:
-    """Genera una muestra sintética plausible de tiempo en Valencia.
-
-    Modo cuando no hay `OPENWEATHER_API_KEY` — útil para dev y tests sin
-    credenciales. Las probabilidades de cada estado están sesgadas hacia
-    "Clear/Clouds" porque es lo más típico aquí."""
     main = random.choices(
         list(WEATHER_BASE_MULTIPLIER.keys()),
         weights=[0.55, 0.20, 0.05, 0.10, 0.05, 0.05],
@@ -104,16 +84,11 @@ def fetch_mock() -> dict:
         "description": main.lower(),
     }
 
-
+#Empaqueta el mensaje y decide por dónde enviarlo siguiendo este orden de prioridad:
+# 1. Nube (Google Cloud): Si está configurado, lo envía a Producción.
+# 2. Servidor (Backend): Si hay una dirección web, lo envía por ahí.
+# 3. Pantalla (Local): Si no hay nada configurado, lo imprime aquí mismo para hacer pruebas.
 def emit(message: dict) -> None:
-    """Publica el mensaje según el sink disponible. Hay 3 modos según envs:
-
-      1. `PUBSUB_PROJECT` → publica al topic `weather` (modo prod / Dataflow).
-      2. `BACKEND_INGEST_URL` → POST HTTP al backend (modo single-host).
-      3. ninguno → vuelca a stdout (modo dev sin emuladores).
-
-    El primer match gana (early return). Cada caso loguea para que el
-    operador vea por dónde fue el mensaje."""
     payload = json.dumps(message)
     if PUBSUB_PROJECT:
         from google.cloud import pubsub_v1
@@ -129,11 +104,10 @@ def emit(message: dict) -> None:
         return
     print(payload, flush=True)
 
-
+#Empaqueta los datos en bruto dándoles el formato exacto que necesita el juego.
+# Añade la hora exacta, el tipo de dato y calcula el multiplicador en este paso.
 def _build_message(data: dict) -> dict:
-    """Convierte la respuesta cruda (real o mock) en el JSON que viaja por el
-    sink. El nombre del campo `indice_multiplicador_tiempo` es contrato del
-    pipeline Dataflow — no renombrar sin coordinar."""
+
     return {
         "type": "weather",
         "ts": datetime.fromtimestamp(data["ts_unix"], tz=timezone.utc).isoformat(),
@@ -148,11 +122,9 @@ def _build_message(data: dict) -> dict:
         "source": "mock" if MOCK else "openweathermap",
     }
 
-
+#cada 30 segundos pide los datos, los empaqueta y los envía. Si internet falla, no se apaga, solo avisa del error y lo vuelve a intentar en la siguiente ronda.
 def main() -> None:
-    """Bucle infinito: cada `INTERVAL_S` segundos pide datos (mock/real),
-    construye el mensaje y lo emite. Los errores no tumban el ingestor —
-    se loguean y se reintenta en el siguiente tick."""
+
     log.info("Starting weather ingestor (mode=%s, interval=%ds)",
              "MOCK" if MOCK else "REAL", INTERVAL_S)
     while True:
