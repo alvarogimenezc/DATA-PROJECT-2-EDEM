@@ -36,19 +36,19 @@ echo ""
 # Si ya estás logueado, gcloud no vuelve a abrir el navegador.
 echo "[1/4] gcloud auth login..."
 gcloud auth login --brief
-gcloud auth application-default login --brief
+gcloud auth application-default login
 gcloud config set project "$PROJECT_ID"
 
 # ─── 2) Bucket GCS para el tfstate ──────────────────────────────────────────
 # Versioned para que cualquier cagada sea reversible. Si ya existe, no falla.
 echo ""
 echo "[2/4] Creando bucket de tfstate (si no existe)..."
-if gsutil ls "gs://${STATE_BUCKET}" >/dev/null 2>&1; then
+if gcloud storage buckets describe "gs://${STATE_BUCKET}" >/dev/null 2>&1; then
   echo "    (ya existe)"
 else
-  gsutil mb -l "$REGION" "gs://${STATE_BUCKET}"
+  gcloud storage buckets create "gs://${STATE_BUCKET}" --location="$REGION"
 fi
-gsutil versioning set on "gs://${STATE_BUCKET}"
+gcloud storage buckets update "gs://${STATE_BUCKET}" --versioning
 
 # ─── 3) Habilitar APIs mínimas para que Terraform pueda arrancar ────────────
 # Terraform luego habilita el resto en 01_apis.tf, pero estas 2 las necesita
