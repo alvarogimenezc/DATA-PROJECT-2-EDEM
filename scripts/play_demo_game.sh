@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
-# play_demo_game.sh — populate a running CloudRISK API with a believable game state.
+# play_demo_game.sh — Crea una partida rápida en la API para tener datos que mostrar.
 #
-# What it does, against http://localhost:8080:
-#   1. Logs in the 4 seeded demo players  (norte/sur/este/oeste @cloudrisk.app)
-#   2. Registers 2 extra commanders        (centro / costa) → 6 players total
-#   3. Each player syncs ~10 000 steps so they have power_points to spend
-#   4. Norte+Este+Centro create / join clan "Pink Lions"  (#ff2d92)
-#      Sur+Oeste+Costa create / join clan "Cyan Wolves"   (#00f0ff)
-#   5. Every player conquers their spawn zone, then deploys 5–15 armies
-#      across two more zones each → ~12 zones owned, real defense values
-#
-# Idempotent-ish: re-running it on the same API will fail on duplicate
-# clan creation but everything else works because users/zones already exist.
-#
-# Requires: bash, curl, python3 (for tiny JSON parsing).
+# Pasos:
+#   1. Hace login con los 4 jugadores base.
+#   2. Registra 2 jugadores nuevos (Centro y Costa).
+#   3. Suma 10,000 pasos a todos para que tengan tropas.
+#   4. Crea clanes ("Pink Lions" y "Cyan Wolves") y une a los jugadores.
+#   5. Conquista zonas por Valencia.
 
 set -euo pipefail
 
@@ -37,7 +30,7 @@ register() {
   curl -sf -X POST "$API/api/v1/users/register" \
     -H "Content-Type: application/json" \
     -d "{\"name\":\"$1\",\"email\":\"$2\",\"password\":\"$PASS\"}" | j "['access_token']" 2>/dev/null \
-    || login "$2"   # already registered → just log in
+    || login "$2"   
 }
 
 with_token() { curl -sf -H "Authorization: Bearer $1" "${@:2}"; }
@@ -75,7 +68,7 @@ with_token "$T_OESTE"  -X POST "$API/api/v1/clans/$CLAN_CYAN/join" >/dev/null &&
 with_token "$T_COSTA"  -X POST "$API/api/v1/clans/$CLAN_CYAN/join" >/dev/null && c_ok "costa → Cyan Wolves"
 
 c_section "5. Conquer + deploy armies"
-# Each line = "TOKEN_VAR  zone_id  armies"  — three deployments per player.
+
 deploy() {
   local tok=$1 zone=$2 amount=$3 who=$4
   curl -sf -X POST "$API/api/v1/zones/$zone/conquer" -H "Authorization: Bearer $tok" >/dev/null 2>&1 || true
@@ -88,7 +81,6 @@ deploy() {
   fi
 }
 
-# Pink Lions territory (north + east of Valencia)
 deploy "$T_NORTE"  "zona-borbot"        15 "norte"
 deploy "$T_NORTE"  "zona-poble-nou"      8 "norte"
 deploy "$T_ESTE"   "zona-la-malva-rosa" 12 "este"
@@ -96,7 +88,6 @@ deploy "$T_ESTE"   "zona-benimaclet"     6 "este"
 deploy "$T_CENTRO" "zona-el-carme"      18 "centro"
 deploy "$T_CENTRO" "zona-russafa"       10 "centro"
 
-# Cyan Wolves territory (south + west)
 deploy "$T_SUR"   "zona-pinedo"         20 "sur"
 deploy "$T_SUR"   "zona-la-punta"        9 "sur"
 deploy "$T_OESTE" "zona-mestalla"  14 "oeste"   # avoid Unicode in bash heredoc

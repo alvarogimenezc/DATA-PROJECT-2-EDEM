@@ -1,34 +1,5 @@
 #!/usr/bin/env python3
-"""
-CloudRISK — Risk-style heuristic AI bot.
 
-Runs N bot players in parallel threads. Each bot, every decision_interval
-seconds, inspects the current game state and picks ONE of three actions
-based on weighted heuristics:
-
-    1. CONQUER an adjacent free zone     (weight_expansion)
-    2. REINFORCE the weakest owned zone  (weight_defense)
-    3. RANDOM  placement on a safe zone  (weight_exploration)
-
-The bot does NOT copy code from any specific GitHub Risk-AI project
-(we checked — pyrisk, risk-bot and others have no explicit LICENSE).
-It IS inspired by the standard phase-based approach used in those
-projects: reinforce → attack → fortify, with adjustable weights.
-
-Usage:
-    # default: 3 bots (sur/este/oeste), leaving norte@cloudrisk.app for the human
-    python data_generator/bot_ia_riesgo.py
-
-    # 2 bots, faster cadence
-    python data_generator/bot_ia_riesgo.py --players este@cloudrisk.app oeste@cloudrisk.app \
-                                          --interval 5
-
-    # Full 4-bot mode (nobody human — for filming a clean demo reel)
-    python data_generator/bot_ia_riesgo.py --players \
-      norte@cloudrisk.app sur@cloudrisk.app este@cloudrisk.app oeste@cloudrisk.app
-
-All bots share the same heuristic; vary --seed if you want reproducible runs.
-"""
 from __future__ import annotations
 
 import argparse
@@ -46,14 +17,12 @@ DEFAULT_API = "http://localhost:8080"
 DEFAULT_PASSWORD = "demo1234"
 DEFAULT_BOTS = ["sur@cloudrisk.app", "este@cloudrisk.app", "oeste@cloudrisk.app"]
 
-# Heuristic weights — tuned by inspection, not learned. Order matters: the
-# decide() function walks them top-to-bottom and picks the first that fires.
+# Pesos de decisión para la IA. La función decide() los lee de arriba a abajo.
 WEIGHT_EXPANSION  = 0.40   # place into an empty zone (if any are left)
 WEIGHT_ATTACK     = 0.35   # attack the weakest adjacent enemy
 WEIGHT_DEFENSE    = 0.20   # reinforce our own weakest zone
 WEIGHT_RANDOM     = 0.05   # pad a random owned zone
 
-# Minimum power_points a bot will keep in reserve before acting.
 RESERVE_POWER = 0
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)-12s %(levelname)s %(message)s")
@@ -105,9 +74,7 @@ class RiskAIBot(threading.Thread):
         )
         self.log.info("logged in (user_id=%s)", self.session.user_id[:8])
 
-        # Bootstrap: the seeded players start with power_points=0. Syncing
-        # steps converts them (100 steps = 1 power_point by default). Bots
-        # with 0 power can't place armies, so we give them a budget up-front.
+       # Recarga inicial de pasos si el bot no tiene poder para jugar
         try:
             me = self._get("/api/v1/users/me")
             if int(me.get("power_points") or 0) < 20:
@@ -127,8 +94,7 @@ class RiskAIBot(threading.Thread):
         r.raise_for_status()
         return r.json() if r.content else {}
 
-    # ---------- State inspection ----------
-
+# ---------- Estado del juego ----------
     def snapshot(self) -> dict:
         """Grab everything the bot needs in one pass."""
         zones = self._get("/api/v1/zones/")
@@ -136,15 +102,9 @@ class RiskAIBot(threading.Thread):
         multipliers = self._get("/api/v1/multipliers/")
         return {"zones": zones, "me": me, "multipliers": multipliers}
 
-    # ---------- Decision ----------
-
+# ---------- Lógica de Decisión ----------
     def decide(self, snap: dict) -> Optional[tuple[str, dict]]:
-        """Return (action, params) or None if the bot has nothing useful to do.
-
-        Actions:
-          - ("conquer", {"zone_id": ...})
-          - ("place",   {"location_id": ..., "amount": ...})
-        """
+        
         me = snap["me"]
         zones = snap["zones"]
         my_id = me["id"]
@@ -154,16 +114,12 @@ class RiskAIBot(threading.Thread):
         free      = [z for z in zones if not z.get("owner_clan_id")]
         enemy     = [z for z in zones if z.get("owner_clan_id") and z.get("owner_clan_id") != my_id]
 
-        # 1) If we've never conquered, claim our first zone (free ≠ enemy).
-        #    Game rule requires clan_id to /conquer — but place_armies in our
-        #    backend sets owner_clan_id = current_user.clan_id OR current_user.id
-        #    (see routers/armies.py). So we can claim via /armies/place too,
-        #    which is the simpler path for a bot.
+        # 1. Primera conquista si no tenemos zonas
         if not owned and free and power >= 1:
             target = self.rng.choice(free)
             return ("place", {"location_id": target["id"], "amount": max(1, min(power, 5))})
 
-        # 2) With power on hand, pick by weighted heuristic.
+        # 2. Selección de acción basada en heurística
         if power > RESERVE_POWER:
             roll = self.rng.random()
             thresh = 0.0
@@ -202,7 +158,7 @@ class RiskAIBot(threading.Thread):
                 target = self.rng.choice(owned)
                 return ("place", {"location_id": target["id"], "amount": max(1, min(power, 2))})
 
-            # Only enemy zones exist + no usable owned → try attacking anyway
+            # Only enemeeey zones exist + no usable owned → try attacking anyway
             if enemy and not owned and free:
                 target = self.rng.choice(free)
                 return ("place", {"location_id": target["id"], "amount": max(1, min(power, 3))})

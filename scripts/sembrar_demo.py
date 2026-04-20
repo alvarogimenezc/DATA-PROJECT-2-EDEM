@@ -1,66 +1,6 @@
 #!/usr/bin/env python3
-"""
-sembrar_demo.py — Deja el proyecto listo para JUGAR en 90 segundos.
-
-¿Qué hace?
-==========
-Después de `terraform apply`, corre este script UNA vez y tendrás:
-
-  1. 4 jugadores demo con login (norte/sur/este/oeste @ cloudrisk.app, pass=demo1234)
-  2. 87 zonas de Valencia cargadas en Firestore.
-  3. 38 zonas YA conquistadas (reparto Norte/Sur/Este/Oeste por cardinales).
-  4. Armies, oro, pasos, batallas ganadas/perdidas ya poblados.
-  5. 3 batallas recientes en el histórico.
-  6. 4 mensajes de ejemplo publicados en los topics ambientales
-     (para que la pipeline Dataflow escriba algo en BigQuery y la demo
-     tenga gráficas).
-
-Es **idempotente**: vuelve a ejecutarlo cuando quieras — usa merge=True.
-
-Cross-platform
-==============
-Funciona en **Windows, Mac, Linux, WSL** porque es Python puro.
-Invocadores de conveniencia (cogen los mismos args):
-
-  scripts/bootstrap_demo.sh     (macOS / Linux / WSL / Git Bash)
-  scripts/bootstrap_demo.ps1    (Windows PowerShell)
-  bash CICD/sembrar_demo.sh     (mismo wrapper, estilo del equipo)
-
-Uso
-===
-
-  # Contra el proyecto real (tras terraform apply):
-  python scripts/sembrar_demo.py --project cloudrisk-492619
-
-  # Contra emulador local (docker compose up):
-  FIRESTORE_EMULATOR_HOST=localhost:8200 PUBSUB_EMULATOR_HOST=localhost:8085 \
-    python scripts/sembrar_demo.py --project cloudrisk-local
-
-  # Dry-run para ver qué haría:
-  python scripts/sembrar_demo.py --project cloudrisk-492619 --dry-run
-
-  # Saltarse el Pub/Sub (sólo Firestore):
-  python scripts/sembrar_demo.py --project cloudrisk-492619 --no-pubsub
-
-Integración con Terraform
-=========================
-Si quieres que corra AUTOMÁTICAMENTE tras `terraform apply`, añade en
-`infrastructure/terraform/main.tf` o donde prefieras:
-
-    resource "null_resource" "seed_demo" {
-      depends_on = [
-        google_firestore_database.default,
-        google_pubsub_topic.air_quality,
-        google_pubsub_topic.weather,
-      ]
-      triggers = { always = timestamp() }
-      provisioner "local-exec" {
-        command = "python ${path.root}/../../scripts/sembrar_demo.py --project ${var.project_id}"
-      }
-    }
-
-(ver infrastructure/terraform/10_demo_seed.tf en este repo).
-"""
+#Script para inicializar la base de datos (Firestore) y Pub/Sub con datos de prueba.
+#Prepara el juego con 4 jugadores, 87 zonas y algunas batallas de ejemplo para la demo.
 from __future__ import annotations
 
 import argparse

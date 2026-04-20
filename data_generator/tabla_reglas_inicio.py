@@ -1,23 +1,3 @@
-"""
-Tabla de reglas al iniciar partida (CloudRISK).
-
-Se llama una vez por arranque de juego desde juego_caminante.py y
-simulacion_rapida_juego.py. Hace dos cosas:
-
-1) Invoca POST /api/v1/turn/setup para inicializar el mundo (clusterizar
-   zonas, repartir 2 tropas/barrio, dar 30 tropas de pool a cada jugador).
-   El endpoint es idempotente.
-
-2) Imprime una tabla ASCII con el desglose de tropas iniciales por jugador:
-       total = zonas*2 + 30 + floor(pasos_hoy / 500)
-   donde:
-       zonas*2         — defensa desplegada por el setup
-       30              — STARTING_ARMIES_POOL (tropas libres para colocar)
-       pasos/500       — bonus de pasos del día (POWER_PER_STEPS)
-
-Sin dependencias externas más allá de `requests` (ya usado por los otros
-scripts del data_generator).
-"""
 from __future__ import annotations
 
 import requests
@@ -54,9 +34,7 @@ def _zones_owned(zones: list[dict], player_id: str) -> int:
 
 
 def _steps_today(api: str, token: str, fallback_total: int) -> int:
-    """Intenta usar el endpoint /steps/realtime-ingestion-status (pasos del día
-    reales). Si no está disponible (p. ej. en local sin BigQuery) cae a
-    steps_total como aproximación."""
+    # Intenta obtener los pasos reales de hoy. Si no hay conexión, usa el total histórico como aproximación.
     try:
         data = _get(api, "/api/v1/steps/realtime-ingestion-status", token)
         today = int(data.get("today_real_steps") or 0)
@@ -66,13 +44,7 @@ def _steps_today(api: str, token: str, fallback_total: int) -> int:
 
 
 def mostrar_tabla_reglas(api: str, tokens: dict[str, dict]) -> None:
-    """Inicializa el juego y muestra la tabla de reglas por jugador.
-
-    Args:
-        api: base URL del backend (p. ej. http://127.0.0.1:8080).
-        tokens: dict {player_id: {"token": ..., "name": ...}} — mismo shape
-            que devuelve login_all() en los simuladores.
-    """
+    # 1. Configuración inicial del tablero (solo necesita un jugador logueado).
     # Fase 1 — setup idempotente. Basta con un jugador autenticado.
     any_token = next(iter(tokens.values()))["token"]
     try:
@@ -81,7 +53,7 @@ def mostrar_tabla_reglas(api: str, tokens: dict[str, dict]) -> None:
         print(f"[tabla_reglas] No se pudo invocar /turn/setup: {exc}")
         setup = {}
 
-    # Fase 2 — estado por jugador.
+    # Fase 2 — obtener estado por jugador.
     zones = _get(api, "/api/v1/zones/")
 
     filas: list[tuple[str, int, int, int, int, int]] = []

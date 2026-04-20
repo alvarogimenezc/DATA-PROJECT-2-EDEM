@@ -1,24 +1,9 @@
 #!/usr/bin/env bash
-# sync_to_team_repo.sh — land one component at a time into the team repo.
+# sync_to_team_repo.sh — Sincroniza nuestra parte del código con el repositorio general del equipo.
 #
-# Prereq:
-#   1. `git remote add team https://github.com/alvarogimenezc/DATA-PROJECT-2-EDEM.git`
-#   2. `git fetch team` at least once
-#   3. A clone of the team repo at ../team-repo (sibling directory)
-#   4. SSH/HTTPS auth to push to the team repo
-#
-# Usage:
-#   bash scripts/sync_to_team_repo.sh walker
-#   bash scripts/sync_to_team_repo.sh backend
-#   bash scripts/sync_to_team_repo.sh weather_airq   # only if Álvaro agrees
-#   bash scripts/sync_to_team_repo.sh pipelines      # only if Noelia agrees
-#   bash scripts/sync_to_team_repo.sh frontend       # only if Ricardo agrees
-#   bash scripts/sync_to_team_repo.sh infra
-#
-# Idempotent:
-#   - Re-running on the same component switches to the same branch name,
-#     rsyncs again, commits with the same message (amend if clean).
-#   - Only pushes if there are new changes.
+# Uso:
+#   bash scripts/sync_to_team_repo.sh pipelines      # (Para Noelia y Martha)
+#   bash scripts/sync_to_team_repo.sh backend        # (Para Fran)
 
 set -euo pipefail
 

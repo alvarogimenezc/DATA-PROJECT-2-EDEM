@@ -141,3 +141,26 @@ python recolector_pasos_diario.py --project cloudrisk-local --date 2026-04-16
 
 El test `test_scorer_applies_multipliers` ya no aplica aquí — la misma
 funcionalidad se cubre ahora en `tests/pipelines/test_cloudrisk_unified.py`.
+
+
+# 📥 Módulo de Ingesta de Pasos (`steps_ingestor/`)
+
+Este módulo se encarga de simular la conexión de nuestra app con dispositivos reales (como relojes inteligentes o Strava). Para no tener que salir a andar de verdad, descargamos datos de movimiento desde un repositorio de GitHub y los metemos en nuestro sistema Cloud.
+
+## ¿Qué hace exactamente?
+
+El script principal `recolector_pasos_diario.py` se ejecuta **1 vez al día**:
+
+1. Descarga el archivo JSON más reciente desde el repositorio de rutas aleatorias.
+2. Comprueba en Firestore si ya hemos procesado esos datos hoy (para no duplicar puntos).
+3. Transforma los datos y los envía a nuestro topic principal en **Pub/Sub** (`player-movements`).
+
+Una vez en Pub/Sub, nuestro pipeline de **Dataflow** recoge estos pasos, aplica las matemáticas del juego (clima y aire) y actualiza el saldo del jugador en la base de datos.
+
+## 🚀 Cómo probarlo localmente
+
+Si quieres ver cómo el script lee el archivo y simula el envío sin gastar saldo en Google Cloud, usa el parámetro `--dry-run`:
+
+```bash
+export PROJECT_ID=cloudrisk-492619
+python recolector_pasos_diario.py --project $PROJECT_ID --dry-run

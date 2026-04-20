@@ -1,37 +1,6 @@
 #!/usr/bin/env python3
-"""
-recolector_pasos_diario.py — Cloud Run Job que tira pasos diarios desde el repo
-`FranciscoAlvarezVaras/random_tracker` y los publica a Pub/Sub.
-
-Corre 1 vez al día (Cloud Scheduler → Cloud Run Job). Puede correrse a mano
-sobre un día pasado para backfill. Es idempotente: dedupe en Firestore por
-fecha → re-ejecutar el mismo día no duplica.
-
-Flujo
------
-  1. GET https://raw.githubusercontent.com/FranciscoAlvarezVaras/random_tracker/main/<file>
-  2. Parsear el JSON (schema de random_tracker — ver README.md).
-  3. Por cada movement, construir evento CloudRISK:
-         {player_id, timestamp, latitude, longitude, speed_mps, steps_delta, source="real"}
-  4. Publicar a topic `player-movements`.
-  5. Escribir marker idempotencia: `step_ingests/{YYYY-MM-DD}` en Firestore.
-
-Variables de entorno
---------------------
-  PROJECT_ID       (requerido) — GCP project.
-  TRACKER_REPO     (default: FranciscoAlvarezVaras/random_tracker) — owner/repo.
-  TRACKER_BRANCH   (default: main).
-  TRACKER_FILE     (default: movements.json) — archivo a tirar del repo.
-  MAPPING_FILE     (default: data/random_tracker_mapping.json) — mapping usuario → player_id.
-  PUBSUB_TOPIC     (default: player-movements).
-
-CLI override
-------------
-  --project        — sobreescribe PROJECT_ID.
-  --date           — YYYY-MM-DD para backfill de un día anterior.
-  --dry-run        — imprime lo que haría sin publicar.
-  --local-file     — tira de un JSON local en lugar del repo (para tests).
-"""
+#Script que descarga los pasos diarios simulados desde GitHub
+#y los envía a Google Cloud Pub/Sub para que Dataflow los procese.
 from __future__ import annotations
 
 import argparse
@@ -53,13 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def load_mapping(path: Path) -> dict[str, str]:
-    """Lee el fichero de mapping usuario → player_id.
-
-    Si el fichero no existe, mapeamos cada entrada del JSON del tracker al
-    player demo por defecto (demo-player-001) para que el ingest siga
-    funcionando out-of-the-box. En prod este fichero debería rellenarlo Fran
-    al dar de alta a los jugadores.
-    """
+    # Lee el mapeo de usuarios. Si no existe, usa un jugador por defecto.
     if not path.exists():
         print(f"[fetcher] mapping file not found ({path}); defaulting everything to demo-player-001")
         return {"*": "demo-player-001"}
@@ -88,11 +51,10 @@ def resolve_player_id(mapping: dict[str, str], tracker_user: str | None) -> str:
 
 
 def estimate_steps_delta(entry: dict, prev: dict | None) -> int:
-    """Estimación aproximada: si el tracker trae 'step_count' lo usa; si no,
-    lo estima desde velocidad*duración asumiendo un paso de 1.3 m."""
+    # Calcula los pasos dados. Usa 'step_count' si existe, o lo estima por velocidad.
     if "step_count" in entry:
         return int(entry["step_count"])
-    # Heurística de fallback
+    
     speed = float(entry.get("speed_mps", 1.3))
     if prev:
         prev_ts = datetime.fromisoformat(prev["timestamp"].replace("Z", "+00:00"))
@@ -105,8 +67,7 @@ def estimate_steps_delta(entry: dict, prev: dict | None) -> int:
 
 
 def dedup_marker(payload: dict, date: str) -> str:
-    """Huella estable para poder guardar 'lo que publicamos hoy' y
-    saltárnoslo la próxima vez aunque el repo no haya cambiado."""
+    
     h = hashlib.sha256(
         json.dumps(payload, sort_keys=True).encode("utf-8")
     ).hexdigest()[:12]
@@ -135,12 +96,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _already_published_today(project: str, date: str) -> bool:
-    """Devuelve True si Firestore ya tiene marker `step_ingests/{date}`.
-
-    Si el chequeo falla (sin credenciales, Firestore caído), devolvemos
-    False y dejamos que el job publique igual — preferimos un duplicado
-    ocasional a perder ingesta de un día por un fallo transitorio.
-    """
+    # Comprueba en Firestore si ya hemos procesado los pasos de hoy
     try:
         from google.cloud import firestore
         db = firestore.Client(project=project)
@@ -152,8 +108,7 @@ def _already_published_today(project: str, date: str) -> bool:
 
 
 def _load_payload(args: argparse.Namespace, repo: str, branch: str, filename: str) -> dict:
-    """Lee el JSON del tracker — fichero local si se pasa `--local-file`,
-    si no, GET HTTPS al repo remoto. Aborta con `sys.exit` si falla la red."""
+    #Lee el JSON del tracker — fichero local si se pasa `--local-file`, si no, GET HTTPS al repo remoto. Aborta con `sys.exit` si falla la red.
     if args.local_file:
         return fetch_local_json(Path(args.local_file))
     try:
@@ -161,9 +116,9 @@ def _load_payload(args: argparse.Namespace, repo: str, branch: str, filename: st
     except Exception as exc:
         sys.exit(f"[fetcher] no pude descargar {repo}/{filename}: {exc}")
 
-
+# 3. Preparar Pub/Sub
 def _build_event(movement: dict, payload_user: str | None, mapping: dict[str, str], prev: dict | None) -> dict:
-    """Construye el evento CloudRISK a publicar a partir de un movement crudo."""
+
     tracker_user = movement.get("user") or movement.get("username") or payload_user
     return {
         "player_id":   resolve_player_id(mapping, tracker_user),
@@ -178,7 +133,7 @@ def _build_event(movement: dict, payload_user: str | None, mapping: dict[str, st
 
 
 def _publish_all_movements(payload: dict, mapping: dict[str, str], publisher, topic_path: str, dry_run: bool) -> int:
-    """Itera el feed, construye un evento por movement y publica. Devuelve cuántos se publicaron."""
+    #Itera el feed, construye un evento por movement y publica. Devuelve cuántos se publicaron.
     movements = payload.get("movements", [])
     print(f"[fetcher] {len(movements)} movements en el feed")
     payload_user = payload.get("user")
@@ -193,8 +148,7 @@ def _publish_all_movements(payload: dict, mapping: dict[str, str], publisher, to
 
 
 def _write_idempotency_marker(project: str, date: str, source_repo: str, published: int) -> None:
-    """Escribe `step_ingests/{date}` para que la próxima ejecución lo vea
-    y se salte el día (a menos que se pase `--force`)."""
+    #Escribe `step_ingests/{date}` para que la próxima ejecución lo vea y se salte el día (a menos que se pase `--force`)."""
     from google.cloud import firestore
     db = firestore.Client(project=project)
     db.collection("step_ingests").document(date).set({

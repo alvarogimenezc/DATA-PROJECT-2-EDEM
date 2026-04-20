@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# seed_emulators.sh — Create Pub/Sub topics required by CloudRISK on the local emulator.
+# seed_emulators.sh — Crea los topics de Pub/Sub necesarios en el emulador local.
 #
-# The Firestore emulator auto-creates collections on first write, so only Pub/Sub
-# needs explicit topic creation. Safe to run multiple times (ignores "already exists").
-#
-# Requires: docker compose stack up (pubsub-emulator healthy) and curl installed.
+# Es seguro ejecutarlo varias veces (ignora si el topic ya existe).
+# Requiere tener Docker Compose corriendo y curl instalado.
 
 set -euo pipefail
 
