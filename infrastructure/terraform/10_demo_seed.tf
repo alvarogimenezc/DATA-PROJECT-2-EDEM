@@ -54,10 +54,10 @@ resource "null_resource" "seed_demo" {
 
   # Windows: usa PowerShell
   provisioner "local-exec" {
-    when       = create
-    on_failure = continue
+    when        = create
+    on_failure  = continue
     interpreter = ["powershell.exe", "-NoProfile", "-Command"]
-    command    = "python '${path.root}/../../scripts/sembrar_demo.py' --project '${var.project_id}'"
+    command     = "python '${path.root}/../../scripts/sembrar_demo.py' --project '${var.project_id}'"
     # En hosts no-Windows Terraform ignora este bloque si el interpreter falta;
     # fallback: el siguiente provisioner (sh) toma el relevo.
   }

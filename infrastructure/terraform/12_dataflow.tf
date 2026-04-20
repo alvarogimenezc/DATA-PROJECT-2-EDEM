@@ -99,6 +99,15 @@ resource "google_dataflow_flex_template_job" "unified" {
 
   container_spec_gcs_path = "gs://${google_storage_bucket.dataflow.name}/templates/cloudrisk-unified.json"
 
+  # Runtime options de Dataflow — van como atributos top-level, NO dentro de
+  # `parameters` (parameters = options que la pipeline Python lee).
+  service_account_email   = google_service_account.dataflow.email
+  temp_location           = "gs://${google_storage_bucket.dataflow.name}/tmp"
+  staging_location        = "gs://${google_storage_bucket.dataflow.name}/staging"
+  max_workers             = 3
+  num_workers             = 1
+  enable_streaming_engine = true
+
   parameters = {
     player_sub    = google_pubsub_subscription.player_movements_sub.id
     weather_sub   = google_pubsub_subscription.weather_sub.id
@@ -107,17 +116,10 @@ resource "google_dataflow_flex_template_job" "unified" {
     env_table     = "${var.project_id}:${google_bigquery_dataset.cloudrisk.dataset_id}.${google_bigquery_table.environmental_factors.table_id}"
     dlq_table     = "${var.project_id}:${google_bigquery_dataset.cloudrisk.dataset_id}.${google_bigquery_table.dead_letter.table_id}"
 
-    max_speed_kmh    = tostring(var.max_speed_kmh)
-    power_per_steps  = tostring(var.power_per_steps)
-    daily_army_cap   = tostring(var.daily_army_cap)
-    daily_steps_cap  = tostring(var.daily_steps_cap)
-
-    temp_location      = "gs://${google_storage_bucket.dataflow.name}/tmp"
-    staging_location   = "gs://${google_storage_bucket.dataflow.name}/staging"
-    serviceAccount     = google_service_account.dataflow.email
-    maxWorkers         = "3"
-    numWorkers         = "1"
-    enableStreamingEngine = "true"
+    max_speed_kmh   = tostring(var.max_speed_kmh)
+    power_per_steps = tostring(var.power_per_steps)
+    daily_army_cap  = tostring(var.daily_army_cap)
+    daily_steps_cap = tostring(var.daily_steps_cap)
   }
 
   depends_on = [
@@ -132,10 +134,10 @@ resource "google_dataflow_flex_template_job" "unified" {
     null_resource.dataflow_flex_template,
   ]
 
-  # Si alguien modifica parámetros de escalado fuera de Terraform, no
-  # forzamos re-creación del job (tirarlo reiniciaría la pipeline).
+  # Si alguien ajusta escalado fuera de Terraform, no forzamos re-creación del
+  # job (tirarlo reiniciaría la pipeline).
   lifecycle {
-    ignore_changes = [parameters["numWorkers"], parameters["maxWorkers"]]
+    ignore_changes = [num_workers, max_workers]
   }
 }
 

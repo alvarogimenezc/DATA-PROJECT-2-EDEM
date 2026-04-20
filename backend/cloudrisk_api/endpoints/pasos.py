@@ -79,10 +79,10 @@ def _sync_step_update(user_id: str, step_count: int) -> None:
     rewards = _apply_step_rewards(user, step_count)
     try:
         pubsub_publisher.publish_step_event(user_id, step_count, rewards["power_earned"])
-    except Exception:
-        # Camino WS: silenciamos el error a propósito para no romper la
-        # actualización en vivo si Pub/Sub no está disponible.
-        pass
+    except Exception as exc:
+        # Camino WS: no propagamos para no romper la actualización en vivo
+        # si Pub/Sub no está disponible, pero dejamos traza para depurar.
+        logger.warning(f"Pub/Sub step publish (WS path) failed for {user_id}: {exc}")
 
 
 async def handle_step_update(user_id: str, steps: int) -> None:

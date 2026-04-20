@@ -52,7 +52,7 @@ resource "google_cloud_run_v2_job" "steps_fetcher" {
   template {
     template {
       service_account = google_service_account.steps_ingestor.email
-      timeout         = "600s"     # 10 min suficiente para tirar un JSON
+      timeout         = "600s" # 10 min suficiente para tirar un JSON
 
       containers {
         # Imagen construida por Cloud Build a partir de steps_ingestor/Dockerfile
@@ -90,6 +90,14 @@ resource "google_cloud_run_v2_job" "steps_fetcher" {
   ]
 }
 
+# El SA del Scheduler debe poder invocar el Job — sin esto, el cron da 403.
+resource "google_cloud_run_v2_job_iam_member" "steps_fetcher_scheduler_invoker" {
+  location = google_cloud_run_v2_job.steps_fetcher.location
+  name     = google_cloud_run_v2_job.steps_fetcher.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler.email}"
+}
+
 # ─── Cloud Scheduler: fetcher diario a las 03:00 Europe/Madrid ──────────────
 resource "google_cloud_scheduler_job" "steps_fetcher_daily" {
   name        = "cloudrisk-steps-fetcher-daily"
@@ -116,6 +124,7 @@ resource "google_cloud_scheduler_job" "steps_fetcher_daily" {
 
   depends_on = [
     google_cloud_run_v2_job.steps_fetcher,
+    google_cloud_run_v2_job_iam_member.steps_fetcher_scheduler_invoker,
   ]
 }
 

@@ -25,12 +25,27 @@ from collections import defaultdict
 from pathlib import Path
 
 
-_GEOJSON_PATH = Path(__file__).resolve().parents[2] / "frontend" / "public" / "valencia_districts.geojson"
-# Si ejecutas desde backend/ el path arriba falla — alternativa con parents[3]
-if not _GEOJSON_PATH.exists():
-    _GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_districts.geojson"
-if not _GEOJSON_PATH.exists():
-    _GEOJSON_PATH = Path("/app/geojson/valencia_districts.geojson")  # Docker mount
+def _resolve_geojson_path() -> Path:
+    """Locate `valencia_districts.geojson` across dev / Docker / repo layouts.
+
+    Candidatos, en orden: repo local (parents[2]), repo desde backend/ (parents[3]),
+    mount en /app/geojson (Docker). Devuelve el primero existente o el último como
+    fallback (lo consumen con `.exists()` quienes dependen de él).
+    """
+    here = Path(__file__).resolve()
+    candidates = (
+        here.parents[2] / "frontend" / "public" / "valencia_districts.geojson",
+        here.parents[3] / "frontend" / "public" / "valencia_districts.geojson",
+        Path("/app/geojson/valencia_districts.geojson"),
+    )
+    for c in candidates:
+        if c.exists():
+            return c
+    return candidates[-1]
+
+
+GEOJSON_PATH: Path = _resolve_geojson_path()
+_GEOJSON_PATH = GEOJSON_PATH  # legacy alias used within this module
 
 _ADJACENCY_CACHE: dict[str, frozenset[str]] | None = None
 

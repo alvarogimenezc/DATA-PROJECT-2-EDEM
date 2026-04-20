@@ -9,12 +9,10 @@ Proyecto 100 % **serverless** sobre Google Cloud Platform. Juego de estrategia g
   - 2) Arquitectura
   - 3) Reglas del juego
   - 4) Flujo de datos
-  - 5) Estructura de tablas - Firestores & BigQuery
+  - 5) Estructura de tablas — Firestore & BigQuery
   - 6) Arranque rápido en local
   - 7) Despliegue a GCP
-  - 8) Resultados, aprendizajes y mejoras
-
-Terminar una vez tengamos todas las secciones OK. 
+  - 8) Arquitectura detallada
 
 ---
 
@@ -37,21 +35,38 @@ La arquitectura seleccionada para la resolución del reto es la siguiente:
 
 ![Texto alternativo](DataProject2.jpg)
 
-Como vemos, se trata de una arquitectura que respeta la filosofía habitual de proyectos de big data : ingesta - transformación - almacenamiento - visualización. 
+Como vemos, se trata de una arquitectura que respeta la filosofía habitual de proyectos de big data: ingesta — transformación — almacenamiento — visualización.
 
-En nuestro caso, tenemos una ingesta de datos de geolocalización de usuarios, factor de calidad ambiental y calidad del aire. Estos datos entran a dataflow donde se aplica la lógica de negocio y como resultado se insertan los ejercitos equivalentes ganados por el usuario tanto en firestore como en BigQuery. 
+En nuestro caso, tenemos una ingesta de datos de geolocalización de usuarios, factor de calidad ambiental y calidad del aire. Estos datos entran a Dataflow donde se aplica la lógica de negocio y como resultado se insertan los ejércitos equivalentes ganados por el usuario tanto en Firestore como en BigQuery.
 
-Firestore alberga las tablas de estados, en el tenemos la tabla de user_balance y location_balance, que se actualizan conforme avanza la partida con los ejercitos disponibles por usuario y las zonas del mapa con los ejercitos y usuario que las controla. 
+Firestore alberga las tablas de estado; en él tenemos las tablas `user_balance` y `location_balance`, que se actualizan conforme avanza la partida con los ejércitos disponibles por usuario y las zonas del mapa con los ejércitos y el usuario que las controla.
 
-La base de datos de BigQuery nos sirve para almacenar datos históricos para métricas y analisis más profundos. 
+La base de datos de BigQuery nos sirve para almacenar datos históricos para métricas y análisis más profundos.
 
-Por último, el frontend se conecta a la tablas mediante un servidor de FastAPI que sirve como puerta de acceso a las bases de datos. Además, las acciones de los usuarios que puedan hacer en la aplicación también interactuan con las bases de datos mediante este servidor de entrada. 
+Por último, el frontend se conecta a las tablas mediante un servidor de FastAPI que sirve como puerta de acceso a las bases de datos. Además, las acciones de los usuarios en la aplicación también interactúan con las bases de datos mediante este servidor de entrada.
 
 ---
 
 ## 3. Reglas del juego
 
-Explicar las reglas del juego, lógica que aplica dataflow de los multiplicadores etc. 
+**CloudRISK** traslada la mecánica de conquista de territorios a la vida real. La economía del juego no avanza por el paso del tiempo, sino por la actividad física del usuario.
+
+**1. Generación de Tropas y Multiplicadores:**
+La conversión base del juego es de **500 pasos = 1 Ejército**. Sin embargo, este valor es dinámico y depende de las condiciones ambientales de Valencia en el momento exacto en que se camina:
+* **Clima:** Días despejados otorgan bonificadores positivos, mientras que la lluvia, el viento o temperaturas extremas aplican penalizaciones.
+* **Calidad del Aire (AQI):** Respirar aire limpio bonifica la generación de tropas, mientras que los niveles altos de contaminación la reducen severamente.
+* *Fórmula de Dataflow:* `Ejércitos = (Pasos / 500) * Factor Clima * Factor Aire`
+
+**2. Sistema Anti-Trampas (Dataflow Juez):**
+Para evitar que los usuarios generen tropas yendo en coche o usando bots, el pipeline de Dataflow vigila cada movimiento con tres reglas estrictas:
+* **Radar de velocidad:** Si la distancia entre dos puntos GPS refleja una velocidad superior a **15 km/h**, el evento se marca como trampa y se descarta automáticamente.
+* **Límite de Pasos Diarios:** Solo se contabilizan un máximo de **30.000 pasos al día** por jugador (equivalente a casi una maratón).
+* **Límite de Tropas:** Ningún jugador puede generar más de **50 ejércitos** en un periodo de 24 horas.
+
+**3. Conquista y Tablero:**
+* **Adyacencia:** Los jugadores solo pueden atacar o fortificar los barrios de Valencia que compartan frontera directa con sus territorios actuales.
+* **Coste de Acción:** Atacar un barrio enemigo o mover tropas consume *Power Points* (Pool). Si el jugador se queda sin puntos, debe volver a salir a caminar para recargar su capacidad de acción.
+* **Desgaste:** Atacar reduce temporalmente el nivel de defensa de la zona desde la que se lanza el ataque.
 
 ---
 
@@ -63,9 +78,9 @@ Explicamos como funcionan los dos flujos de datos
 
 ---
 
-## 5. Estructura de tablas - Firestores & BigQuery
+## 5. Estructura de tablas — Firestore & BigQuery
 
-Explicar las 4 tablas, para que sirve cada una, estructura de datos. Por que escojemos firestore y bigquery
+Explicar las 4 tablas, para qué sirve cada una, estructura de datos. Por qué escogemos Firestore y BigQuery.
 
 ---
 
@@ -76,13 +91,13 @@ Pasos para arrancar la arquitectura en local:
 
 **Terminal 1 — Docker**
 
-Levantamos los contenedores de Pub/Sub, IFrestore, APIS y fronted: 
+Levantamos los contenedores de Pub/Sub, Firestore, APIs y frontend:
 ```bash
 docker compose up -d --build
 ```
 **Terminal 2 — Crear topics en el emulador (una sola vez)**
 
-El contendor de Pub/Sub está vacío, tenemos que crear los tópicos y suscripciones de manera manual: 
+El contenedor de Pub/Sub está vacío, tenemos que crear los tópicos y suscripciones de manera manual:
 ```bash
 export PUBSUB_EMULATOR_HOST="localhost:8085"
 pip install google-cloud-pubsub
@@ -90,17 +105,17 @@ python scripts/setup_local_pubsub.py
 ```
 **Terminal 3 — Pipeline Apache Beam (queda corriendo)**
 
-Apache BEAM es un script que se ejecuta en nuestro ordenador (el pipeline), tenemos que levantarlo a mano: 
+Apache Beam es un script que se ejecuta en nuestro ordenador (el pipeline), tenemos que levantarlo a mano:
 ```bash
 export PUBSUB_EMULATOR_HOST="localhost:8085"
 export FIRESTORE_EMULATOR_HOST="localhost:8200"
 pip install -r pipelines/requirements.txt
-python pipelines/cloudrisk_unified.py `
-    --runner=DirectRunner `
-    --project=cloudrisk-local `
-    --player_sub=projects/cloudrisk-local/subscriptions/player-movements-sub `
-    --weather_sub=projects/cloudrisk-local/subscriptions/weather-sub `
-    --airq_sub=projects/cloudrisk-local/subscriptions/air-quality-sub `
+python pipelines/cloudrisk_unified.py \
+    --runner=DirectRunner \
+    --project=cloudrisk-local \
+    --player_sub=projects/cloudrisk-local/subscriptions/player-movements-sub \
+    --weather_sub=projects/cloudrisk-local/subscriptions/weather-sub \
+    --airq_sub=projects/cloudrisk-local/subscriptions/air-quality-sub \
     --local --streaming
 ```
 **Terminal 4 — Walker / simulador de pasos (genera datos)**
@@ -125,7 +140,7 @@ Hay dos matices técnicos que conviene dejar por escrito para que no parezcan de
 1. **`air-ingestor` y `weather-ingestor` tienen `min_instance_count = 1`** ([08_cloud_run.tf](infrastructure/terraform/08_cloud_run.tf)). Cloud Run "puro" escala a cero, pero estos dos servicios hacen polling cada 30s a OpenWeather — si escalaran a cero dejarían de pollear. Siguen siendo serverless (pagamos por uso, no gestionamos la VM), pero con 1 instancia tibia permanente.
 2. **Dataflow streaming mantiene workers 24/7** ([12_dataflow.tf](infrastructure/terraform/12_dataflow.tf)). Un job streaming por definición no escala a cero: los workers los gestiona Google con autoscaling de 1 a 3, pero siempre hay al menos 1. Es el mismo patrón que el `realtime_recommendation_engine` del repo del profe.
 
-Los demás servicios (`cloudrisk-api`, `cloudrisk-web`, `walker`, `steps-fetcher`) sí escalan a cero cuando nadie los usa.
+Los demás servicios (`cloudrisk-api`, `cloudrisk-web`) sí escalan a cero cuando nadie los usa. `walker` y `steps-fetcher` son Cloud Run **Jobs**, así que ni siquiera están corriendo salvo cuando los dispara el Scheduler.
 
 La consigna del profe es literal: *"The infrastructure must be managed as a Terraform project, allowing the entire architecture to be deployed seamlessly with a single terraform apply command"*. Eso es lo que hemos montado — el apartado 7.3 de abajo.
 
@@ -202,130 +217,189 @@ Si lo quieres cambiar o entender mejor está en [infrastructure/deploy.sh](infra
 
 ---
 
-## 8. Resultados, aprendizajes y mejoras
+## 8. Arquitectura detallada
 
-### 8.1 — Auto-setup de partida al arrancar el backend
+La sección 2 da la foto general. Esta sección desgrana **qué corre dónde, quién habla con quién y por dónde pasan los datos** a partir de lo que realmente hay en el repo (código + Terraform).
 
-Antes, cada vez que un compañero clonaba el repo y levantaba el backend,
-Firestore estaba vacío y el frontend mostraba 0 zonas. Ahora el arranque de
-la API llama a `/setup/run` internamente — 15 zonas × 4 jugadores con
-`defense_level=2` y pool vacío. Así el HUD del mapa ya pinta algo a la
-primera, sin tocar ningún botón.
+### 8.1 — Diagrama de componentes
 
-**Aprendizaje**: los defaults "cero" son hostiles para una demo. Si el
-estado inicial del sistema no tiene sentido visual, el primero que abre la
-app piensa que está roto.
+> Reemplaza este bloque por una imagen (`![arquitectura](ruta/imagen.png)`) cuando la tengas. Mientras tanto, aquí va el esquema en ASCII que resume cómo fluye todo:
 
-### 8.2 — Bots que juegan "como un humano" (v3.3)
-
-El bot original era tonto — elegía cualquier zona random, ignoraba si era
-adyacente y no pagaba pool. Con 3 bots jugando simultáneamente el usuario
-perdía la partida sin ver nada interesante.
-
-Qué cambió en [simulador.py](backend/cloudrisk_api/endpoints/simulador.py):
-
-- **Priorizan al líder**: `_get_leader()` devuelve el jugador con más
-  zonas. El bot intenta atacarle primero — así la partida se autoequilibra
-  en vez de ir todos contra el usuario.
-- **Adyacencia real**: `neighbors_of(zone_id)` filtra sólo zonas tocables.
-  Antes el bot "teletransportaba" tropas.
-- **Pagan su pool igual que yo**: 2 `power_points` por conquista, 1 por
-  fortificar, debitados vía `usuarios_repo.update_user`. Si el pool está a
-  0, el bot hace `idle`.
-- **Reciben `_grant_turn_bonus` al terminar su turno**: mismo bonus que el
-  humano (`max(3, zones//3)`). Antes sólo se lo daba al usuario y los
-  bots quedaban descapitalizados a los 2-3 turnos.
-- **Atacar gasta defensa de la zona origen**: `defense_level -= 1` tras
-  atacar. Evita que un bot con 1 zona potente conquiste media ciudad sin
-  mermarse.
-
-**Aprendizaje**: "bot inteligente" en un juego multijugador no es que juegue
-bien — es que juegue creíble. Si el bot no sigue las mismas reglas que el
-humano, la partida se siente rota aunque técnicamente funcione.
-
-### 8.3 — `/simulate_bots/run` con `mode="step"`
-
-El endpoint original ejecutaba los 3 turnos de bot en una sola llamada HTTP.
-El `TurnBanner` del frontend no alcanzaba a pintar "Turno de Sur" antes de
-que ya hubiera pasado al siguiente. Añadimos `mode: Literal["loop","step"]`
-con default `"loop"` (retrocompat total) — en `step` el backend ejecuta UN
-solo turno de bot y devuelve. El frontend controla la cadencia.
-
-**Aprendizaje**: si quieres feedback visual en un proceso iterativo, el
-servidor tiene que devolver control entre iteraciones. La alternativa (SSE,
-websockets) era overkill para 3 turnos.
-
-### 8.4 — Botón "Jugar turnos de bots" en el HUD del mapa
-
-Estaba en el Dashboard (lobby), pero la partida pasa en el `MapView`. Lo
-movimos al HUD, al lado de "Terminar turno". El componente `SimulateBotsButton`
-tiene su propio polling de `/turn/` cada 3s (patrón ya usado por
-`TurnBanner` y `EndTurnButton`) — no tocamos el prop drilling del padre.
-
-**Aprendizaje**: 3 componentes polleando el mismo endpoint es "más feo" en
-teoría pero mantiene los componentes independientes y el prop drilling
-limpio. Elevar a un `useTurn()` compartido lo dejamos para cuando duela.
-
-### 8.5 — Cadencia lenta (4.5s/paso) + resumen por bot
-
-El botón recorre 3 bots con `await sleep(4500)` entre pasos — total ≈ 14s.
-Durante la pausa el botón muestra `✓ Sur: +2 zonas, +1 fort (1/3)` —
-resumen de lo que acaba de hacer ese bot. Al cambiar de bot pinta
-`Jugando Este… (2/3)` y repite.
-
-**Bug que aprendimos a no cometer**: la condición inicial era
-`lastSummary.bot !== currentBot` — lo contrario de lo que queríamos. El
-resumen se veía 500ms en la transición y la pausa de 4.5s mostraba
-"Jugando X…" — totalmente inútil. Fix en [commit e0c5071](frontend/src/pages/UrbanPacer.jsx).
-
-**Aprendizaje**: al escribir labels de UI con estados derivados, dibujar
-el timeline en papel antes de codear. Los `!==` invertidos son el bug más
-estúpido y más caro de diagnosticar en caliente.
-
-### 8.6 — Modal de ataque con info real de la zona
-
-El `ActionPanel` con `kind="attack"` mostraba 3 pills con el balance del
-ATACANTE (`Disponibles/Hoy/Total`). Tras el auto-setup el pool está a 0 y
-se veía `0/0/0` — parecía un bug de la zona objetivo. Sustituido por:
-
-- **DEFENSA** — `zone.total_armies ?? zone.defense_level` en rojo.
-- **PROPIETARIO** — nombre del clan rival con su color.
-- **MIS ADY.** — conteo de mis zonas adyacentes con `defense_level >= 2`.
-  Si es 0 → banner amarillo + botón disabled ("Conquista primero un
-  barrio vecino").
-
-**Aprendizaje**: un modal de acción debe mostrar info del objetivo, no del
-actor. Y la validación debe ser pre-click (banner) además de post-click
-(red de seguridad del backend) — si el usuario sólo se entera del error
-tras pulsar, la UX se siente rota.
-
-### 8.7 — Gotcha de Terraform: cambios en código Python no redeployan
-
-[13_docker_builds.tf](infrastructure/terraform/13_docker_builds.tf) dispara
-`docker build` con `triggers = { dockerfile, requirements }`. Si tocas
-`simulador.py` o `UrbanPacer.jsx` y haces `terraform apply`, Terraform dice
-`No changes` y Cloud Run sigue sirviendo la imagen vieja.
-
-Para forzar rebuild tras cambios sólo de código:
 ```
-cd infrastructure/terraform
-terraform apply -replace=null_resource.image_api -replace=null_resource.image_frontend
+┌─────────────────────────── FUENTES (Cloud Run) ──────────────────────────┐
+│                                                                            │
+│   ┌──────────────┐   ┌──────────────────┐   ┌──────────────┐   ┌──────────┐│
+│   │   walker     │   │  steps-fetcher   │   │ air-ingestor │   │ weather- ││
+│   │   (Job)      │   │   (Job, 03:00)   │   │ (min=1, 30s) │   │ ingestor ││
+│   │ 4 bots sim.  │   │  ← random_tracker│   │ ← OWM aire   │   │ ← OWM    ││
+│   └──────┬───────┘   └────────┬─────────┘   └──────┬───────┘   └────┬─────┘│
+└──────────┼────────────────────┼────────────────────┼────────────────┼─────┘
+           │                    │                    │                │
+           ▼                    ▼                    ▼                ▼
+   ╔══════════════════════════════╗   ╔══════════════╗   ╔═════════════╗
+   ║    player-movements  (topic) ║   ║ air-quality  ║   ║  weather    ║
+   ╚──────────────┬───────────────╝   ╚──────┬───────╝   ╚──────┬──────╝
+                  │                          │                  │
+                  └────────────┬─────────────┴──────────────────┘
+                               ▼
+                   ┌─────────────────────────┐
+                   │   Dataflow streaming    │
+                   │   cloudrisk-unified     │   ← stateful:
+                   │  (Flex Template, 1-3    │       last_location,
+                   │   workers, 24/7)        │       armies_today,
+                   │                         │       steps_today,
+                   │  - parse + validate     │       timer 24h UTC
+                   │  - anti-trampa (speed)  │
+                   │  - haversine distance   │
+                   │  - env_multiplier       │
+                   │  - caps diarios         │
+                   └──────┬───────────┬──────┘
+                          │           │
+              ┌───────────┘           └────────────┐
+              ▼                                    ▼
+     ┌────────────────────┐              ┌──────────────────────┐
+     │    Firestore       │              │      BigQuery        │
+     │  (región eur3)     │              │   (dataset cloudrisk)│
+     │                    │              │                      │
+     │  users, zones,     │              │  player_scoring_     │
+     │  clans, battles,   │              │    events            │
+     │  user_balance ◄──┐ │              │  environmental_      │
+     │  location_balance│ │              │    factors           │
+     └─────────┬────────┼─┘              │  dead_letter         │
+               │        │                 └──────────┬───────────┘
+               │        │                            │
+               ▼        │                            ▼
+     ┌────────────────────┐                 ┌──────────────────┐
+     │   cloudrisk-api    │◄────────────────│  (lectura de     │
+     │   FastAPI + WS     │                 │   analíticas)    │
+     │   (Cloud Run, 0-10)│                 └──────────────────┘
+     └────────┬──────────┬┘
+              │          │                  ┌──────────────────┐
+              │          └─────── llamada ──┤ Cloud Scheduler  │
+              │                   horaria   │ - resolve-battles│
+              │                             │ - steps-fetcher  │
+              │                             └──────────────────┘
+              ▼
+     ┌────────────────────┐          ┌──────────────┐
+     │   cloudrisk-web    │◄────────►│   Usuario    │
+     │   React + MapLibre │          │   (navegador)│
+     │   (Cloud Run, 0-5) │          └──────────────┘
+     └────────────────────┘
 ```
 
-**Aprendizaje**: `filemd5()` sobre Dockerfile/requirements es barato y
-evita rebuilds innecesarios, pero introduce un paso manual cuando cambias
-sólo código fuente. Alternativa futura: un trigger que haga hash recursivo
-de `backend/**/*.py`, aunque relentiza cada `plan`.
+### 8.2 — Inventario de componentes
 
-### 8.8 — Flujo de trabajo: worktree + main local, sin push
+**Cloud Run Services** ([08_cloud_run.tf](infrastructure/terraform/08_cloud_run.tf))
 
-Durante toda esta fase trabajamos sobre un worktree
-(`.claude/worktrees/stoic-jepsen-070830`) con rama `claude/stoic-jepsen-070830`
-y fusionamos a `main` local. No hacemos `git push` — el push lo hace el
-usuario cuando quiere. Al fusionar `origin/main` en local (commit
-`a4fe46d`) sin conflictos, confirmamos que el worktree no divergió.
+| Servicio | Fuente | Escalado | Rol |
+|---|---|---|---|
+| `cloudrisk-api` | [backend/](backend/) | 0–10 | FastAPI: 13 routers REST + WebSocket |
+| `cloudrisk-web` | [frontend/](frontend/) | 0–5 | React + Vite + MapLibre 3D |
+| `cloudrisk-air-ingestor` | [weather_airq/calidad_aire.py](weather_airq/calidad_aire.py) | 1 fijo | Poll de calidad del aire cada 30s → Pub/Sub |
+| `cloudrisk-weather-ingestor` | [weather_airq/clima.py](weather_airq/clima.py) | 1 fijo | Poll de clima cada 30s → Pub/Sub |
 
-**Aprendizaje**: worktrees separan el trabajo en curso de la rama principal
-sin clonar el repo dos veces. Combinado con "commit local, push manual",
-das margen al humano a revisar antes de publicar.
+**Cloud Run Jobs** ([08_cloud_run.tf:253](infrastructure/terraform/08_cloud_run.tf#L253), [11_steps_ingestor.tf:48](infrastructure/terraform/11_steps_ingestor.tf#L48))
+
+| Job | Fuente | Disparo | Rol |
+|---|---|---|---|
+| `cloudrisk-walker` | [data_generator/juego_caminante.py](data_generator/juego_caminante.py) | Manual / Scheduler | Simula 4 bots caminando por Valencia |
+| `cloudrisk-steps-fetcher` | [steps_ingestor/recolector_pasos_diario.py](steps_ingestor/recolector_pasos_diario.py) | Cron diario 03:00 UTC | Descarga pasos reales del repo `random_tracker` |
+
+**Dataflow** ([12_dataflow.tf](infrastructure/terraform/12_dataflow.tf), [pipelines/cloudrisk_unified.py](pipelines/cloudrisk_unified.py))
+
+Flex Template en streaming, **stateful**. Consume las 3 suscripciones de Pub/Sub y escribe en Firestore + BigQuery. Detalles en 8.3.
+
+**Pub/Sub** ([02_pubsub.tf](infrastructure/terraform/02_pubsub.tf)) — 3 topics con su DLQ:
+
+| Topic | Productor | Subscripción | Consumidor |
+|---|---|---|---|
+| `player-movements` | walker, steps-fetcher | `player-movements-sub` | Dataflow |
+| `air-quality` | air-ingestor | `air-quality-sub` | Dataflow |
+| `weather` | weather-ingestor | `weather-sub` | Dataflow |
+
+**Firestore** ([03_firestore.tf](infrastructure/terraform/03_firestore.tf)) — `FIRESTORE_NATIVE`, región `eur3`, PITR 7 días, delete protection. Colecciones: `users`, `zones` (87 barrios de Valencia), `clans`, `battles`, `step_logs`, `user_balance` ⟵ _contrato de equipo, escrito por Dataflow_, `location_balance` ⟵ _contrato de equipo, escrito por backend_.
+
+**BigQuery** ([04_bigquery.tf](infrastructure/terraform/04_bigquery.tf)) — dataset `cloudrisk` (EU multi-region):
+- `player_scoring_events` — evento-por-evento del pipeline (particionado por día, clusterizado por `player_id`).
+- `environmental_factors` — lecturas de aire/clima con su multiplicador (particionado por día).
+- `dead_letter` — eventos rechazados con motivo y payload original.
+
+**Cloud Scheduler** ([09_scheduler.tf](infrastructure/terraform/09_scheduler.tf), [11_steps_ingestor.tf:102](infrastructure/terraform/11_steps_ingestor.tf#L102))
+
+| Cron | Horario | Dispara |
+|---|---|---|
+| `cloudrisk-resolve-battles` | `0 * * * *` (cada hora) | `POST /api/v1/battles/resolve-expired` en el backend |
+| `cloudrisk-steps-fetcher-daily` | `0 3 * * *` | Cloud Run Job `steps-fetcher` |
+
+**Secret Manager** ([06_secrets.tf](infrastructure/terraform/06_secrets.tf)) — `cloudrisk-jwt-secret`, `openweather-api-key`, `scheduler-secret`.
+
+**Service Accounts** ([07_iam.tf](infrastructure/terraform/07_iam.tf)) — 6 SA con mínimo privilegio: `cloudrisk-api`, `cloudrisk-ingestor`, `cloudrisk-walker`, `cloudrisk-steps-ingestor`, `cloudrisk-dataflow`, `cloudrisk-scheduler`.
+
+**Artifact Registry** ([05_artifact_registry.tf](infrastructure/terraform/05_artifact_registry.tf)) — repo `cloudrisk` en `europe-west1-docker.pkg.dev` con 7 imágenes: `api`, `frontend`, `walker`, `air-ingestor`, `weather-ingestor`, `steps-ingestor`, `dataflow-unified`.
+
+### 8.3 — Flujos de datos
+
+**Flujo A · Pasos → ejércitos** _(el camino principal del juego)_
+
+1. `walker` o `steps-fetcher` publica `{player_id, lat, lng, steps, ts}` en `player-movements`.
+2. Dataflow consume con una `ScoringDoFn` **stateful** ([pipelines/cloudrisk_unified.py](pipelines/cloudrisk_unified.py)):
+   - `ReadModifyWriteStateSpec` guarda la última posición del jugador → calcula distancia haversine.
+   - **Anti-trampa**: si `speed_kmh > MAX_SPEED_KMH` (15) → DLQ.
+   - Lee `env_multiplier` (aire × clima, rango 0.6–1.5) desde side input.
+   - `armies = (steps_delta × env_multiplier) / POWER_PER_STEPS`.
+   - `CombiningValueStateSpec` acumula `armies_today` y `steps_today`. Si superan los caps → se capa y marca `capped=true`.
+   - `TimerSpec` (REAL_TIME) resetea los contadores a las 00:00 UTC.
+3. Escritura doble: **Firestore** (`user_balance` con `Increment`) + **BigQuery** (`player_scoring_events`).
+4. El frontend ve el nuevo balance al consultar `/api/v1/users/me`.
+
+**Flujo B · Acciones del usuario**
+
+React llama a endpoints del FastAPI ([backend/cloudrisk_api/main.py](backend/cloudrisk_api/main.py)) con JWT Bearer. Endpoints clave:
+
+| Endpoint | Fichero | Qué hace |
+|---|---|---|
+| `POST /users/register`, `/login` | [endpoints/usuarios.py](backend/cloudrisk_api/endpoints/usuarios.py) | Alta + JWT (7 días) |
+| `GET /zones/` | [endpoints/zonas.py](backend/cloudrisk_api/endpoints/zonas.py) | Lista 87 barrios + adyacencias |
+| `POST /armies/place`, `/fortify` | [endpoints/ejercitos.py](backend/cloudrisk_api/endpoints/ejercitos.py) | Despliega tropas en zonas |
+| `POST /battles/`, `/{id}/resolve` | [endpoints/batallas.py](backend/cloudrisk_api/endpoints/batallas.py) | Combate tipo Risk con dados |
+| `GET /multiplicadores/` | [endpoints/multiplicadores.py](backend/cloudrisk_api/endpoints/multiplicadores.py) | Multiplicador aire×clima actual |
+| `GET /analiticas/*` | [endpoints/analiticas.py](backend/cloudrisk_api/endpoints/analiticas.py) | Consultas a BigQuery (top pasos, días lluviosos, mala calidad del aire…) |
+
+El backend escribe en Firestore (dato caliente) y consulta BigQuery (histórico/analítica). Cloud Scheduler dispara endpoints internos con header `X-Scheduler-Token`.
+
+**Flujo C · Multiplicadores ambientales**
+
+`air-ingestor` y `weather-ingestor` son _polling loops_ en Cloud Run (por eso `min_instance_count = 1`). Cada 30s llaman a OpenWeatherMap, calculan un multiplicador en [0.6, 1.5], y publican. Dataflow los fusiona como side input y los escribe en `environmental_factors` de BigQuery (auditoría + gráficas).
+
+### 8.4 — Parámetros del juego ([variables.tf](infrastructure/terraform/variables.tf), [configuracion.py](backend/cloudrisk_api/configuracion.py))
+
+| Parámetro | Default | Qué controla |
+|---|---|---|
+| `POWER_PER_STEPS` | 500 | Pasos necesarios para 1 ejército |
+| `DAILY_ARMY_CAP` | 50 | Máx. ejércitos ganables al día |
+| `DAILY_STEPS_CAP` | 30 000 | Máx. pasos contabilizados al día |
+| `MAX_SPEED_KMH` | 15 | Umbral anti-trampa |
+| `STARTING_ARMIES_POOL` | 30 | Tropas iniciales por jugador |
+| `INITIAL_ARMIES_PER_ZONE` | 2 | Tropas por zona al setup |
+| Rango multiplicador | [0.6, 1.5] | Aire × clima modulan la ganancia |
+
+### 8.5 — Entrada a Terraform ([infrastructure/terraform/](infrastructure/terraform/))
+
+Archivos numerados para leerse en orden. Cada uno tiene un rol único:
+
+```
+01_apis.tf               → habilita APIs de GCP
+02_pubsub.tf             → topics + subscripciones
+03_firestore.tf          → DB del juego
+04_bigquery.tf           → dataset + 3 tablas
+05_artifact_registry.tf  → registry Docker
+06_secrets.tf            → 3 secretos
+07_iam.tf                → 6 SA con roles mínimos
+08_cloud_run.tf          → 4 servicios + 1 job
+09_scheduler.tf          → cron horario de batallas
+10_demo_seed.tf          → datos de demo
+11_steps_ingestor.tf     → job diario de pasos reales
+12_dataflow.tf           → pipeline streaming (Flex Template)
+13_docker_builds.tf      → builds de las 7 imágenes (null_resource)
+```
 

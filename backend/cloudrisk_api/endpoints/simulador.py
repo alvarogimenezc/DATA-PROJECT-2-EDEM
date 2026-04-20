@@ -37,9 +37,12 @@ Cambios importantes vs v3.2:
 
 from __future__ import annotations
 
+import logging
 import random
 from datetime import datetime, timezone
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -309,8 +312,9 @@ def _apply_action(
                 "attacker_rolls": [], "defender_rolls": [],
                 "attacker_losses": 1, "defender_losses": tgt_def,
             })
-        except Exception:
-            pass
+        except Exception as exc:
+            # Fallo al guardar historial de bot: no bloquea la acción en curso.
+            logger.warning(f"bot battle history write failed for zone {zone['id']}: {exc}")
         return {"bot": bot_id, "action": "attack", "zone_id": zone["id"],
                 "zone_name": zone.get("name"), "prev_owner": prev_owner,
                 "from_zone": origin["id"] if origin else None,

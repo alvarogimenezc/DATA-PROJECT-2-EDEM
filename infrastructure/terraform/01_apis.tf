@@ -18,16 +18,16 @@
 resource "google_project_service" "apis" {
   for_each = toset([
     "run.googleapis.com",              # Cloud Run (services + jobs)
-    "firestore.googleapis.com",         # Firestore (BD NoSQL)
-    "pubsub.googleapis.com",            # Pub/Sub (cola de mensajes)
-    "bigquery.googleapis.com",          # BigQuery (data warehouse)
-    "secretmanager.googleapis.com",     # Secret Manager (secretos cifrados)
-    "artifactregistry.googleapis.com",  # Artifact Registry (Docker registry)
-    "dataflow.googleapis.com",          # Dataflow (Beam streaming)
-    "iam.googleapis.com",               # IAM (permisos)
-    "cloudscheduler.googleapis.com",    # Cron jobs serverless
-    "eventarc.googleapis.com",          # Eventos entre servicios
-    "logging.googleapis.com",           # Logs centralizados
+    "firestore.googleapis.com",        # Firestore (BD NoSQL)
+    "pubsub.googleapis.com",           # Pub/Sub (cola de mensajes)
+    "bigquery.googleapis.com",         # BigQuery (data warehouse)
+    "secretmanager.googleapis.com",    # Secret Manager (secretos cifrados)
+    "artifactregistry.googleapis.com", # Artifact Registry (Docker registry)
+    "dataflow.googleapis.com",         # Dataflow (Beam streaming)
+    "iam.googleapis.com",              # IAM (permisos)
+    "cloudscheduler.googleapis.com",   # Cron jobs serverless
+    "eventarc.googleapis.com",         # Eventos entre servicios
+    "logging.googleapis.com",          # Logs centralizados
   ])
 
   service = each.key
