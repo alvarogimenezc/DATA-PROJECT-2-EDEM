@@ -1,76 +1,38 @@
-# pipelines/ — Jobs de streaming en Dataflow
+# 🧠 pipelines/ — El Cerebro de CloudRISK (Dataflow)
 
-Fan-in de los 3 topics Pub/Sub del juego → un único job de Dataflow → dos
-sinks (Firestore para estado en tiempo real + BigQuery para histórico analítico).
+Este directorio contiene el archivo `cloudrisk_unified.py`, que es el motor principal del juego. Es un programa construido con Apache Beam que está **siempre encendido** escuchando los datos que llegan de internet.
 
-### Topología
+Su misión es sencilla: recibir los pasos de los jugadores, vigilar que nadie haga trampas, calcular los puntos usando el clima real, y mandar los ejércitos al móvil del jugador.
 
-```
-steps_ingestor/recolector_pasos_diario  ──► Pub/Sub  player-movements   ┐
-weather_airq/clima.py                   ──► Pub/Sub  weather            ├─► Dataflow
-weather_airq/calidad_aire.py            ──► Pub/Sub  air-quality        ┘   (stateful)
-                                                                          │
-                                                       ┌──────────────────┼─────────────────────┐
-                                                       ▼                  ▼                     ▼
-                                                  Firestore         BigQuery              BigQuery (DLQ)
-                                                  user_balance/    player_scoring_events  dead_letter
-                                                  users/           environmental_factors
-```
+---
 
-### Lógica de negocio (en un solo sitio)
+## Las Reglas del Juego (Qué hace el código)
 
-El `StatefulScoringDoFn` está *keyed* por `player_id` y mantiene tres piezas
-de estado por usuario:
+Cada vez que un jugador da un paso, el sistema hace estas comprobaciones en milisegundos:
 
-| Estado Beam | Tipo | Para qué |
-|---|---|---|
-| `last_position` | `ReadModifyWriteStateSpec` | Última (lat, lon, ts) para calcular distancia y velocidad |
-| `armies_today` | `CombiningValueStateSpec(sum)` | Ejércitos acumulados en el día → trunca a `DAILY_ARMY_CAP` |
-| `steps_today` | `CombiningValueStateSpec(sum)` | Pasos acumulados en el día → trunca a `DAILY_STEPS_CAP` (anti-trampa extra) |
+1. **Radar de Velocidad (Anti-trampas):** Compara dónde estabas hace un rato y dónde estás ahora. Si vas a más de **15 km/h**, el sistema asume que vas en bici o coche. El evento se marca como trampa y se tira a la basura.
+2. **Tope de Pasos Diarios:** Vigila que nadie reporte más de **30.000 pasos** al día (para evitar cuentas robot o abusos). Lo que pase de ahí, no cuenta.
+3. **El Clima Importa:** Revisa qué tiempo hace en Valencia en ese segundo exacto. Si hace sol y el aire es puro, tus pasos valen más. Si hay tormenta, valen menos.
+4. **Calculadora de Tropas:** Transforma los pasos limpios en tropas (la regla base es **500 pasos = 1 ejército**).
+5. **Tope de Tropas:** Se asegura de que nadie gane más de **50 ejércitos** en un solo día.
 
-Un `TimerSpec` en `ProcessingTime` (24 h) limpia `armies_today` y `steps_today`
-de golpe cuando toca reset diario.
+*(Todos estos límites se pueden cambiar en cualquier momento sin tocar el código, usando variables de entorno en GCP).*
 
-**Reglas aplicadas por evento:**
+---
 
-1. Haversine vs. `last_position` → `distance_m`, `speed_kmh`.
-2. Speed check: si `speed_kmh > MAX_SPEED_KMH` → DLQ `anti_cheat_speed`, no acumula nada.
-3. Cap de pasos diario: si `steps_today + steps_delta > DAILY_STEPS_CAP` → trunca el exceso y marca `capped=True`.
-4. Multiplicador ambiental (side input `AsSingleton` desde weather + air-quality).
-5. `armies_earned = (steps_permitidos // POWER_PER_STEPS) × multiplicador`.
-6. Cap diario de armies: `min(armies_earned, DAILY_ARMY_CAP − armies_today)`.
+## El Viaje de los Datos
 
-### Parámetros (env vars o flags CLI)
+¿De dónde viene la información y a dónde va dentro de este pipeline?
 
-| Parámetro | Default | Efecto |
-|---|---|---|
-| `POWER_PER_STEPS` | `500` | Pasos necesarios para 1 army |
-| `DAILY_ARMY_CAP` | `50` | Máx armies/día por jugador |
-| `DAILY_STEPS_CAP` | `30000` | Máx pasos contables/día (anti-trampa, ≈ maratón) |
-| `MAX_SPEED_KMH` | `15` | Umbral anti-trampa (> 15 km/h = DLQ) |
+```text
+1. ENTRADAS                     2. CEREBRO                  3. SALIDAS
+(Pub/Sub)                       (Dataflow)                  (Bases de datos)
 
-### Esquema BigQuery
-
-**`cloudrisk.player_scoring_events`** — histórico por evento:
-
-| Columna | Tipo | Notas |
-|---|---|---|
-| `player_id` | STRING | Identidad del jugador |
-| `ts` | TIMESTAMP | Timestamp del evento (origen) |
-| `lat`, `lon` | FLOAT | Posición reportada |
-| `steps_delta` | INT | Pasos permitidos (tras cap) |
-| `distance_m`, `speed_kmh` | FLOAT | Derivados |
-| `env_multiplier` | FLOAT | 0.6–1.5 |
-| `armies_earned` | INT | Ejércitos otorgados (tras caps) |
-| `armies_today_after` | INT | Acumulado día tras el evento |
-| `capped` | BOOLEAN | Si se truncó por cap diario de pasos |
-| `rejected` | BOOLEAN | Si el evento fue rechazado |
-| `rejection_reason` | STRING | e.g. `anti_cheat_speed` |
-| `processed_at` | TIMESTAMP | Cuándo lo escribió el pipeline |
-
-**`cloudrisk.environmental_factors`** — snapshots clima/aire (schema igual que antes del refactor).
-
-**`cloudrisk.dead_letter`** — JSONs no parseables o rechazados por anti-trampa.
+[Pasos de los jugadores] ─┐                               ┌─► FIRESTORE (El juego en vivo)
+[El clima actual]        ─┼──►  PIPELINE DE CLOUDRISK ────┤   Actualiza la pantalla del móvil.
+[La calidad del aire]    ─┘     Calcula y da puntos       │
+                                                          └─► BIGQUERY (El historial)
+                                                              Guarda los rankings y trampas.
 
 ### Ejecutar en local con el Direct Runner
 
@@ -113,15 +75,19 @@ python pipelines/cloudrisk_unified.py \
 El job de streaming corre indefinidamente hasta `gcloud dataflow jobs cancel JOB_ID`.
 
 ### Queries de ejemplo
+Como guardamos una copia de todo en BigQuery, se pueden lanzar consultas SQL para ver cómo va la partida.
 
 ```sql
--- Último multiplicador ambiental por tipo (últimos 5 min)
-SELECT type, ARRAY_AGG(multiplier ORDER BY ts DESC LIMIT 1)[OFFSET(0)] AS latest
-FROM `cloudrisk-492619.cloudrisk.environmental_factors`
-WHERE ts > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 5 MINUTE)
-GROUP BY type;
+-- Ejemplo 1: Ver quiénes son los que más han caminado este mes:
+SELECT player_id, SUM(steps_delta) AS total_pasos
+FROM `cloudrisk-492619.cloudrisk.player_scoring_events`
+WHERE ts > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+  AND capped = FALSE
+GROUP BY player_id
+ORDER BY total_pasos DESC
+LIMIT 10;
 
--- Top jugadores por pasos del último mes
+-- Ejemplo 2: Top jugadores por pasos del último mes
 SELECT player_id, SUM(steps_delta) AS total_steps
 FROM `cloudrisk-492619.cloudrisk.player_scoring_events`
 WHERE ts > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
@@ -130,16 +96,14 @@ GROUP BY player_id
 ORDER BY total_steps DESC
 LIMIT 10;
 
--- Eventos rechazados (DLQ)
-SELECT player_id, rejection_reason, COUNT(*) AS n
+-- Ejemplo 3: Cazar a los tramposos (Gente que va a más de 15km/h):
+SELECT player_id, rejection_reason, COUNT(*) AS intentos_trampa
 FROM `cloudrisk-492619.cloudrisk.dead_letter`
 WHERE processed_at > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)
 GROUP BY player_id, rejection_reason
-ORDER BY n DESC;
+ORDER BY intentos_trampa DESC;
 ```
 
-El dataset `cloudrisk` debe existir antes de la primera ejecución — ver
-`infrastructure/terraform/04_bigquery.tf`.
 
 ### Tests
 
@@ -150,5 +114,4 @@ para simular ventanas de tiempo y timers sin depender de GCP real:
 pytest tests/pipelines/test_cloudrisk_unified.py -v
 ```
 
-Cubren: evento normal → BQ + Firestore, evento con velocidad > 15 km/h → DLQ,
-cap diario de pasos, cap diario de armies, reset 24 h del timer.
+
