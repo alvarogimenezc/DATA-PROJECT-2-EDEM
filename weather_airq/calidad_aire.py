@@ -6,6 +6,7 @@ import logging
 import os
 import random
 import time
+
 from datetime import datetime, timezone
 
 import requests
@@ -100,17 +101,14 @@ def _build_message(data: dict) -> dict:
 #bucle infinito a prueba de fallos. Cada 30 segundos repite este ciclo exacto: Lee los datos del aire, 
 #calcula el multiplicador y envía el mensaje a la nube.
 # si internet falla, avisa del error y espera 30 segundos para volver a intentarlo.
+# Borras el while True y el sleep. El main se queda así de simple:
 def main() -> None:
-    log.info("Starting air_quality ingestor (mode=%s, interval=%ds)",
-             "MOCK" if MOCK else "REAL", INTERVAL_S)
-    while True:
-        try:
-            data = fetch_mock() if MOCK else fetch_real()
-            emit(_build_message(data))
-        except Exception as exc:  
-            log.warning("ingest cycle failed: %s", exc)
-        time.sleep(INTERVAL_S)
-
+    log.info("Ejecutando ingestor una sola vez...")
+    try:
+        data = fetch_mock() if MOCK else fetch_real()
+        emit(_build_message(data))
+    except Exception as exc:
+        log.warning("ingest cycle failed: %s", exc)
 
 if __name__ == "__main__":
     main()
