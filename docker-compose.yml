@@ -79,6 +79,8 @@ services:
     container_name: cloudrisk-frontend
     working_dir: /app
     command: sh -c "npm ci --silent && npm run dev -- --host 0.0.0.0"
+    environment:
+      VITE_API_HOST: api
     volumes:
       - ./frontend:/app
       - frontend-node-modules:/app/node_modules

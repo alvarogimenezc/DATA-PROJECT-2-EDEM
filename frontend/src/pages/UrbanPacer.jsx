@@ -3594,6 +3594,40 @@ function BattleEventOverlay({ events }) {
   )
 }
 
+function ResetGameButton({ onRefresh }) {
+  const [loading, setLoading] = useState(false)
+  const [confirm, setConfirm] = useState(false)
+
+  const handleReset = async () => {
+    if (!confirm) { setConfirm(true); setTimeout(() => setConfirm(false), 3000); return }
+    setLoading(true); setConfirm(false)
+    try {
+      await api.post('/api/v1/turn/setup')
+      onRefresh?.()
+    } catch (e) {
+      console.error('Reset failed', e)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <motion.button
+      whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+      onClick={handleReset}
+      disabled={loading}
+      className={`flex items-center gap-2 px-4 py-3 rounded-2xl backdrop-blur-xl border font-bold text-sm transition-colors ${
+        confirm
+          ? 'border-red-500/70 bg-red-500/20 text-red-300 animate-pulse'
+          : 'border-white/10 bg-black/70 text-white/60 hover:text-white/90'
+      }`}
+      title="Reiniciar partida"
+    >
+      {loading ? '⏳' : confirm ? '¿Seguro?' : '🔄'} {confirm ? 'Confirmar' : loading ? '' : 'Reiniciar'}
+    </motion.button>
+  )
+}
+
 //  - Resumen de lo que hizo el bot (qué conquistó / atacó / fortificó)
 // En total ~14 s para los 3 bots — Fran dijo "hazlos más lentos para
 // percatarme" así que cadencia cómoda > velocidad.
@@ -4015,6 +4049,7 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
           <EnvironmentBanner />
           <EndTurnButton myUserId={currentUserId} />
           <SimulateBotsButton myUserId={currentUserId} onRefresh={refreshData} onBattleEvents={setBattleEvents} />
+          <ResetGameButton onRefresh={refreshData} />
 
           {/* Botón historial de batallas */}
           <motion.button
@@ -4418,6 +4453,7 @@ export default function UrbanPacer() {
   const handleWsMessage = useCallback((msg) => {
     if (!msg?.event) return
     switch (msg.event) {
+      case 'game_state_update':
       case 'zone_updated':
       case 'battle_started':
       case 'battle_resolved':

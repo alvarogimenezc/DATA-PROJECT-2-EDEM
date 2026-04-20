@@ -1,4 +1,8 @@
-"""WebSocket connection manager for real-time game events."""
+"""WebSocket connection manager for real-time game events.
+
+Expone `manager` como singleton de módulo para que cualquier endpoint
+pueda importarlo sin pasar por main.py (evita importaciones circulares).
+"""
 
 from __future__ import annotations
 
@@ -60,3 +64,9 @@ class ConnectionManager:
             if await self._try_send(user_id, message):
                 sent += 1
         return sent
+
+
+# Singleton compartido por toda la aplicación.
+# main.py lo importa para pasárselo al endpoint /ws; los endpoints
+# (simulador, turno, zonas…) lo importan aquí para emitir eventos.
+manager = ConnectionManager()

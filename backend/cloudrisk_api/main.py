@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from cloudrisk_api.endpoints import (
     analiticas as analytics,
     ejercitos as armies,
+    batallas as battles,
     clanes as clans,
     misiones as missions,
     multiplicadores as multipliers,
@@ -29,12 +30,10 @@ from cloudrisk_api.endpoints import (
     zonas as zones,
     simulador as simulation,
 )
-from cloudrisk_api.services.gestor_websocket import ConnectionManager
+from cloudrisk_api.services.gestor_websocket import manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("cloudrisk_api")
-
-manager = ConnectionManager()
 
 base_path = "/api/v1"
 api_router = APIRouter(prefix=base_path)
@@ -79,6 +78,7 @@ app.include_router(prefix=api_router.prefix, router=multipliers.router)
 app.include_router(prefix=api_router.prefix, router=turn.router)
 app.include_router(prefix=api_router.prefix, router=team_compat.router)
 app.include_router(prefix=api_router.prefix, router=missions.router)
+app.include_router(prefix=api_router.prefix, router=battles.router)
 app.include_router(prefix=api_router.prefix, router=analytics.router)
 app.include_router(prefix=api_router.prefix, router=simulation.router)
 

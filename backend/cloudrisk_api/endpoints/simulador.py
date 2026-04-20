@@ -45,10 +45,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from cloudrisk_api.configuracion import settings, MAX_ZONE_DEFENSE
-from cloudrisk_api.database import zonas as zonas_repo, usuarios as usuarios_repo
+from cloudrisk_api.database import zonas as zonas_repo, usuarios as usuarios_repo, batallas as batallas_repo
 from cloudrisk_api.services.autenticacion import get_current_user
 from cloudrisk_api.services import estado_juego as game_state
 from cloudrisk_api.services.adyacencia import neighbors_of
+from cloudrisk_api.services.gestor_websocket import manager
 from cloudrisk_api.endpoints.turno import _grant_turn_bonus
 from cloudrisk_api.bot_meta import (
     BSR_CRITICO, MIN_POOL_ARIETE, RESERVA_CONQUISTA,
@@ -284,19 +285,34 @@ def _apply_action(
                 "pool_left": prev_pool - cost}
 
     if action == "attack":
-        # Sin dados — batalla simplificada. El origen pierde 1 (tropa que toma
-        # la zona), el target cambia de dueño con defense=1. Mantiene el
-        # comportamiento histórico para no romper el resto del juego.
+        prev_owner = zone.get("owner_clan_id")
+        orig_def = int(origin.get("defense_level") or 0) if origin else 0
+        tgt_def = int(zone.get("defense_level") or 0)
         if origin is not None:
-            orig_def = int(origin.get("defense_level") or 0)
             zonas_repo.update_zone(origin["id"], {"defense_level": max(1, orig_def - 1)})
         zonas_repo.update_zone(zone["id"], {
             "owner_clan_id": bot_id,
             "defense_level": 1,
             "conquered_at": now_iso,
         })
+        # Guarda en historial para que aparezca en el panel del mapa
+        try:
+            battle = batallas_repo.create_battle(
+                zone_id=zone["id"],
+                attacker_clan_id=bot_id,
+                defender_clan_id=prev_owner or "",
+                attacker_power=orig_def,
+                defender_power=tgt_def,
+            )
+            batallas_repo.update_battle(battle["id"], {
+                "result": "attacker_wins",
+                "attacker_rolls": [], "defender_rolls": [],
+                "attacker_losses": 1, "defender_losses": tgt_def,
+            })
+        except Exception:
+            pass
         return {"bot": bot_id, "action": "attack", "zone_id": zone["id"],
-                "zone_name": zone.get("name"), "prev_owner": zone.get("owner_clan_id"),
+                "zone_name": zone.get("name"), "prev_owner": prev_owner,
                 "from_zone": origin["id"] if origin else None,
                 "from_zone_name": origin.get("name") if origin else None,
                 "new_defense": 1}
@@ -343,7 +359,7 @@ def _run_bot_turn(bot_id: str, actions_count: int, now_iso: str) -> list[dict]:
 
 
 @router.post("/run")
-def run_simulation(
+async def run_simulation(
     req: SimulateBotsRequest = SimulateBotsRequest(),
     current_user: dict = Depends(get_current_user),
 ):
@@ -397,6 +413,8 @@ def run_simulation(
             "summary": summary,
             "turn_bonus": bonus_info,
         })
+        # Notificar a todos los clientes conectados para que refresquen el mapa
+        await manager.broadcast({"event": "game_state_update", "bot": bot_id, "summary": summary})
         safety_cap -= 1
         # Modo "step": rompe tras UN turno de bot. El frontend decide cuándo
         # seguir para que se vea el TurnBanner cambiar entre llamadas.
