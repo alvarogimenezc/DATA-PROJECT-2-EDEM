@@ -10,5 +10,5 @@
 
 project_id       = "cloudrisk-492619"
 region           = "europe-west1"
-jwt_secret       = "09c57fad53f9b0b1ec847ff037ff1e07068dca582b76a757e0d438c34dd9e776"
+jwt_secret       = "CAMBIAME-genera-con-python-c-import-secrets-print-secrets-token_hex-32"
 scheduler_secret = "CAMBIAME-a-un-token-aleatorio-de-32-bytes-hex-o-mas"

@@ -68,6 +68,14 @@ resource "google_secret_manager_secret_iam_member" "api_jwt_access" {
   member    = local.api_sa_member
 }
 
+# Leer el scheduler_secret (usado por turno.py / batallas.py / multiplicadores.py
+# para validar el header X-Scheduler-Token en llamadas internas).
+resource "google_secret_manager_secret_iam_member" "api_scheduler_secret_access" {
+  secret_id = google_secret_manager_secret.scheduler_secret.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = local.api_sa_member
+}
+
 # =============================================================================
 # SERVICE ACCOUNT 2: cloudrisk-scheduler (para los cron jobs de Cloud Scheduler)
 # =============================================================================

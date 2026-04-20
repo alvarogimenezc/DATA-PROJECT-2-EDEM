@@ -74,6 +74,7 @@ resource "google_cloud_run_v2_service" "api" {
   depends_on = [
     google_project_service.apis,
     google_secret_manager_secret_iam_member.api_jwt_access,
+    google_secret_manager_secret_iam_member.api_scheduler_secret_access,
     null_resource.image_api,
   ]
 }

@@ -29,8 +29,8 @@ resource "google_bigquery_dataset" "cloudrisk" {
   delete_contents_on_destroy = false # Protege contra `terraform destroy`
 
   labels = {
-    env     = "prod"
-    course  = "serverless-edem-2026"
+    env      = "prod"
+    course   = "serverless-edem-2026"
     contract = "team"
   }
 
@@ -63,11 +63,11 @@ resource "google_bigquery_table" "environmental_factors" {
   }
 
   schema = jsonencode([
-    { name = "ts",            type = "TIMESTAMP", mode = "REQUIRED", description = "Cuando la medida fue tomada" },
-    { name = "type",          type = "STRING",    mode = "REQUIRED", description = "air_quality | weather" },
-    { name = "multiplier",    type = "FLOAT",     mode = "REQUIRED", description = "Multiplicador del juego [0.6, 1.5]" },
-    { name = "raw_payload",   type = "STRING",    mode = "REQUIRED", description = "JSON original del ingestor" },
-    { name = "processed_at",  type = "TIMESTAMP", mode = "REQUIRED", description = "Cuando Dataflow proceso la fila" },
+    { name = "ts", type = "TIMESTAMP", mode = "REQUIRED", description = "Cuando la medida fue tomada" },
+    { name = "type", type = "STRING", mode = "REQUIRED", description = "air_quality | weather" },
+    { name = "multiplier", type = "FLOAT", mode = "REQUIRED", description = "Multiplicador del juego [0.6, 1.5]" },
+    { name = "raw_payload", type = "STRING", mode = "REQUIRED", description = "JSON original del ingestor" },
+    { name = "processed_at", type = "TIMESTAMP", mode = "REQUIRED", description = "Cuando Dataflow proceso la fila" },
   ])
 }
 
@@ -91,19 +91,19 @@ resource "google_bigquery_table" "player_scoring_events" {
   clustering = ["player_id"]
 
   schema = jsonencode([
-    { name = "player_id",          type = "STRING",    mode = "REQUIRED" },
-    { name = "ts",                 type = "TIMESTAMP", mode = "REQUIRED" },
-    { name = "latitude",           type = "FLOAT",     mode = "NULLABLE" },
-    { name = "longitude",          type = "FLOAT",     mode = "NULLABLE" },
-    { name = "steps_delta",        type = "INTEGER",   mode = "REQUIRED" },
-    { name = "distance_m",         type = "FLOAT",     mode = "REQUIRED" },
-    { name = "speed_kmh",          type = "FLOAT",     mode = "REQUIRED" },
-    { name = "env_multiplier",     type = "FLOAT",     mode = "REQUIRED" },
-    { name = "rappel_applied",     type = "BOOLEAN",   mode = "REQUIRED" },
-    { name = "armies_earned",      type = "INTEGER",   mode = "REQUIRED" },
-    { name = "armies_today_after", type = "INTEGER",   mode = "REQUIRED" },
-    { name = "capped",             type = "BOOLEAN",   mode = "REQUIRED" },
-    { name = "processed_at",       type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "player_id", type = "STRING", mode = "REQUIRED" },
+    { name = "ts", type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "latitude", type = "FLOAT", mode = "NULLABLE" },
+    { name = "longitude", type = "FLOAT", mode = "NULLABLE" },
+    { name = "steps_delta", type = "INTEGER", mode = "REQUIRED" },
+    { name = "distance_m", type = "FLOAT", mode = "REQUIRED" },
+    { name = "speed_kmh", type = "FLOAT", mode = "REQUIRED" },
+    { name = "env_multiplier", type = "FLOAT", mode = "REQUIRED" },
+    { name = "rappel_applied", type = "BOOLEAN", mode = "REQUIRED" },
+    { name = "armies_earned", type = "INTEGER", mode = "REQUIRED" },
+    { name = "armies_today_after", type = "INTEGER", mode = "REQUIRED" },
+    { name = "capped", type = "BOOLEAN", mode = "REQUIRED" },
+    { name = "processed_at", type = "TIMESTAMP", mode = "REQUIRED" },
   ])
 }
 
@@ -125,10 +125,10 @@ resource "google_bigquery_table" "dead_letter" {
   }
 
   schema = jsonencode([
-    { name = "source",       type = "STRING",    mode = "REQUIRED" },
-    { name = "reason",       type = "STRING",    mode = "REQUIRED" },
-    { name = "player_id",    type = "STRING",    mode = "NULLABLE" },
-    { name = "raw_payload",  type = "STRING",    mode = "REQUIRED" },
+    { name = "source", type = "STRING", mode = "REQUIRED" },
+    { name = "reason", type = "STRING", mode = "REQUIRED" },
+    { name = "player_id", type = "STRING", mode = "NULLABLE" },
+    { name = "raw_payload", type = "STRING", mode = "REQUIRED" },
     { name = "processed_at", type = "TIMESTAMP", mode = "REQUIRED" },
   ])
 }

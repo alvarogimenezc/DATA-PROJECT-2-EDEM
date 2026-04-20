@@ -28,6 +28,11 @@ terraform {
       source  = "hashicorp/google-beta"
       version = "~> 5.0"
     }
+    # null se usa para los `null_resource` de docker builds y seed de demo.
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.2"
+    }
   }
 
   # STATE remoto en GCS — IMPORTANTE: este bucket debe existir ANTES de
