@@ -1,55 +1,21 @@
-# data_generator/
+# Generador de Datos Sintéticos (WalkRisk)
 
-## 🎯 Qué hace este directorio
+## 🎯 ¿Para qué sirve esta carpeta?
 
-Es el **"walker"**: un generador de datos sintéticos que simula jugadores moviéndose por Valencia. Publica movimientos (lat, lon, speed, timestamp) al topic `player-movements` con `source="synthetic_walker"` siguiendo el contrato del equipo.
+Esta carpeta contiene los simuladores que hemos creado para el proyecto WalkRisk. Dado que no podemos generar miles de pasos físicos reales para evaluar la arquitectura Cloud, hemos creado scripts que simulan la actividad de varios jugadores en Valencia. 
 
-Se usa para dos cosas:
+Con estos scripts generamos eventos (latitud, longitud, velocidad y tiempo) y los inyectamos en nuestro sistema de **Pub/Sub** de Google Cloud para probar que nuestras pipelines de Dataflow y BigQuery funcionan correctamente.
 
-1. **Dev local**: llenar el sistema de eventos sin que nadie tenga que abrir la app y andar.
-2. **Demos E2E**: en clase, lanzar el walker + 3 bots de IA para que la partida avance sola mientras enseñamos la página `/analytics` del frontend.
-
-En producción corre como **Cloud Run Job** (no Service — no expone HTTP, solo se dispara y termina).
-
-## 🛠️ Lenguajes y tecnologías
-
-| Tech | Por qué aquí |
-|---|---|
-| **Python 3.12** | Lenguaje común del equipo. Las librerías de geografía (`osmnx`, `shapely`, `networkx`) son de primera clase en Python. |
-| **osmnx + networkx** | Para que los jugadores "anden" por calles reales de OpenStreetMap en vez de teletransportarse entre puntos aleatorios. Da realismo a los pasos. |
-| **google-cloud-pubsub** | Publica los movements al mismo topic que usaría la app real del frontend. Así Dataflow no distingue entre sintético y humano. |
-| **apache-beam[gcp]** | Usado por el `recolector_metricas_local.py` para agregar métricas en modo local (escribe JSONL inspeccionable en `/metrics/` cuando no hay BigQuery disponible). |
-| **requests** | Para los bots de IA que atacan el backend HTTP directamente en vez de publicar a Pub/Sub. |
-
-## 📂 Archivos principales
+## 📂 Archivos del módulo
 
 | Archivo | Qué hace |
 |---|---|
-| `juego_caminante.py` | 4 "andadores" sintéticos recorren las 87 zonas de Valencia; cada paso publica a `player-movements`. |
-| `bot_ia_riesgo.py` | Bots con heurística tipo Risk (expansión / ataque / defensa / random). Pegan al backend por HTTP, no Pub/Sub. |
-| `simulacion_rapida_juego.py` | Simulador acelerado para demos: una partida entera comprimida en ~60 s. |
-| `simulacion_multijugador.py` | Ejecuta varias simulaciones en paralelo (test de carga). |
-| `recolector_metricas_local.py` | Suscriptor Pub/Sub + pipeline Beam que escribe `.jsonl` en `/metrics` cuando no hay BigQuery. |
-| `tabla_reglas_inicio.py` | Siembra en Firestore la tabla de reglas iniciales del juego (zonas, multiplicadores base). Se corre 1 vez al bootstrap. |
-| `Dockerfile` | Imagen base del walker, usuario no-root, CMD por defecto `recolector_metricas_local.py`. |
-| `requirements.txt` | Pub/Sub, Firestore, Beam, osmnx, networkx, shapely, requests. |
+| `juego_caminante.py` | Simula a 4 personas caminando por los 87 barrios de Valencia; envía los pasos a Pub/Sub. |
+| `bot_ia_riesgo.py` | Inteligencia Artificial para el juego. Simula decisiones de ataque o defensa basadas en los ejércitos disponibles. |
+| `simulacion_rapida_juego.py` | Acelerador de partidas. Lo utilizamos para llenar las bases de datos rápidamente y poder mostrar los Dashboards en las demos. |
+| `recolector_metricas_local.py` | Script de respaldo para guardar los logs de Pub/Sub en local (archivos `.jsonl`) si falla la nube. |
+| `tabla_reglas_inicio.py` | Script que inicializa el mapa de Firestore con los territorios la primera vez que se lanza el juego. |
 
-## 🔗 Cómo se conecta con el resto del proyecto
-
-```
-data_generator/juego_caminante.py  ──(publish)──▶  Pub/Sub: player-movements
-                                                        │
-                          ┌─────────────────────────────┼────────────────────────┐
-                          ▼                             ▼                        ▼
-                     consumer/                     Dataflow                 recolector_metricas_local.py
-                     (stdout log)              (→ BigQuery)                 (→ JSONL local)
-
-data_generator/bot_ia_riesgo.py  ──(HTTP)──▶  backend/  (POST /auth, /zones/conquer, /armies/deploy)
-```
-
-- **Publisher** del topic `player-movements` (Terraform lo crea en `02_pubsub.tf`).
-- **Cliente HTTP** del `backend/` cuando corre como bot de IA.
-- Comparte contrato de mensaje con el frontend: `{player_id, timestamp, latitude, longitude, speed_mps}`.
 
 ## 🚀 Cómo ejecutarlo
 
@@ -79,3 +45,10 @@ gcloud run jobs update cloudrisk-walker \
 # Disparar el Job ya desplegado
 gcloud run jobs execute cloudrisk-walker --region europe-west1
 ```
+## 🚀 Cómo lo ejecutamos para las pruebas
+
+1. **Lanzar caminantes locales (para ver cómo funciona GCP):**
+```bash
+gcloud auth application-default login
+export PROJECT_ID=cloudrisk-492619
+python juego_caminante.py --moves 200

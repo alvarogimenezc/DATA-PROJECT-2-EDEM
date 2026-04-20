@@ -42,3 +42,37 @@ resource "google_cloud_scheduler_job" "resolve_battles" {
     google_project_service.apis,
   ]
 }
+
+resource "google_cloud_scheduler_job" "air_ingestor_cron" {
+  name             = "cloudrisk-air-ingestor-cron"
+  description      = "Lanza el ingestor de calidad del aire cada minuto"
+  schedule         = "* * * * *"
+  time_zone        = "Europe/Madrid"
+  attempt_deadline = "320s"
+  region           = var.region
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/cloudrisk-air-ingestor:run"
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+    }
+  }
+}
+
+resource "google_cloud_scheduler_job" "weather_ingestor_cron" {
+  name             = "cloudrisk-weather-ingestor-cron"
+  description      = "Lanza el ingestor de clima cada minuto"
+  schedule         = "* * * * *"
+  time_zone        = "Europe/Madrid"
+  attempt_deadline = "320s"
+  region           = var.region
+
+  http_target {
+    http_method = "POST"
+    uri         = "https://${var.region}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${var.project_id}/jobs/cloudrisk-weather-ingestor:run"
+    oauth_token {
+      service_account_email = google_service_account.scheduler.email
+    }
+  }
+}

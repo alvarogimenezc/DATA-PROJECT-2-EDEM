@@ -1,20 +1,5 @@
 #!/usr/bin/env python3
-"""
-CloudRISK — Run N full Risk matches back-to-back and report aggregate stats.
 
-Each simulation:
-  1. POST /turn/setup  (distribute 86 zones 22/22/21/21, 2 armies each)
-  2. Run up to MAX_MOVES of bot actions (random place/attack/end_turn)
-  3. Record the winner (player with most zones at stop)
-  4. Stop early when any player owns >= WIN_THRESHOLD zones
-
-After N simulations: aggregate win counts, average moves, average conquest
-ratio per player, and print a clean leaderboard.
-
-Usage:
-    python data_generator/simulacion_multijugador.py --runs 10
-    python data_generator/simulacion_multijugador.py --runs 5 --threshold 40 --max-moves 300
-"""
 from __future__ import annotations
 
 import argparse
@@ -76,13 +61,7 @@ def standings() -> tuple[Counter, list]:
 
 
 def act(player_id: str, tok: str, zones: list, adj: dict, rng: random.Random) -> tuple[str, bool]:
-    """
-    Una acción atómica del bot. Respeta reglas Risk v3:
-      - Sólo puede atacar zonas ADYACENTES a una zona propia con >=2 armies.
-      - Puede reclamar zonas libres adyacentes (más barato que atacar).
-      - Si no puede atacar, refuerza la zona más débil.
-    Devuelve (kind, succeeded).
-    """
+    
     owned = [z for z in zones if z.get("owner_clan_id") == player_id]
     free  = [z for z in zones if not z.get("owner_clan_id")]
     enemy = [z for z in zones if z.get("owner_clan_id") and z.get("owner_clan_id") != player_id]
@@ -98,8 +77,7 @@ def act(player_id: str, tok: str, zones: list, adj: dict, rng: random.Random) ->
             free_neighbors = [z for z in free if z["id"] in neighbors]
             if free_neighbors:
                 target = rng.choice(free_neighbors)
-                r = post(f"/api/v1/zones/{target['id']}/attack", tok,
-                         from_zone_id=o["id"], attacker_dice=1)
+                r = post(f"/api/v1/zones/{target['id']}/attack", tok, from_zone_id=o["id"], attacker_dice=1)
                 return "conquer", r.status_code == 200
 
     roll = rng.random()
@@ -132,8 +110,7 @@ def act(player_id: str, tok: str, zones: list, adj: dict, rng: random.Random) ->
             source, target = viable[0]
             dice = min(3, int(source.get("defense_level") or 2) - 1)
             if dice >= 1:
-                r = post(f"/api/v1/zones/{target['id']}/attack", tok,
-                         from_zone_id=source["id"], attacker_dice=dice)
+                r = post(f"/api/v1/zones/{target['id']}/attack", tok, from_zone_id=source["id"], attacker_dice=dice)
                 return "attack", r.status_code == 200
 
     return "skip", False
@@ -143,7 +120,7 @@ def run_one_match(sim_num: int, max_moves: int, win_threshold: int, verbose: boo
     """Run a single match. Returns {winner, moves, owners, duration_s}."""
     t0 = time.time()
 
-    # Setup (distribute zones)
+    # Configuración (distribuir zonas)
     any_token = next(iter(login_all().values()))["token"]
     r = post("/api/v1/turn/setup", any_token)
     r.raise_for_status()
@@ -151,7 +128,7 @@ def run_one_match(sim_num: int, max_moves: int, win_threshold: int, verbose: boo
     if verbose:
         print(f"[sim {sim_num}] setup: {setup['zones_per_player']}")
 
-    # Give each bot lots of power
+    # Dale mucho poder a cada robot
     tokens = login_all()
     bootstrap_power(tokens)
 
@@ -162,7 +139,7 @@ def run_one_match(sim_num: int, max_moves: int, win_threshold: int, verbose: boo
     if verbose:
         print(f"[sim {sim_num}] adjacency: {len(adj)} zones loaded")
 
-    # Run moves until someone wins or we hit the cap
+    # Correr movimientos hasta que alguien gane o alcancemos el límite
     move = 0
     player_order = list(tokens.keys())
     stats = defaultdict(lambda: {"attacks": 0, "reinforces": 0, "conquests": 0, "conquers": 0})
@@ -172,7 +149,7 @@ def run_one_match(sim_num: int, max_moves: int, win_threshold: int, verbose: boo
             zones = get("/api/v1/zones/")
             owners = Counter(z.get("owner_clan_id") for z in zones if z.get("owner_clan_id"))
 
-            # Early stop
+            # Parada temprana
             if owners.most_common(1) and owners.most_common(1)[0][1] >= win_threshold:
                 break
 
@@ -180,7 +157,7 @@ def run_one_match(sim_num: int, max_moves: int, win_threshold: int, verbose: boo
             if ok:
                 stats[pid][f"{kind}s"] += 1
                 move += 1
-            # end turn to rotate
+            # fin de giro para rotar
             post("/api/v1/turn/end", tokens[pid]["token"])
 
         else:
@@ -261,7 +238,7 @@ def main():
         cc = COLORS.get(name, "")
         print(f"   {cc}{name:6s}{RESET} {c:2d} victorias ({pct:5.1f}%)  {bar}")
 
-    # Avg zones per player across all sims
+    # Zonas promedio por jugador en todas las simulaciones
     total_zones: dict = defaultdict(int)
     for r in results:
         for pid, count in r["owners"].items():

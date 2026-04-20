@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""
-CloudRISK — Walker-driven 4-bot match.
-Simulates 4 players walking through Valencia's 87 districts; each step
-drifts a short random distance and acts on the nearest zone (claim /
-reinforce / attack / end turn). Publishes every step to the Pub/Sub
-topic `player-movements` following the team contract.
 
-Message schema (team contract):
-    {player_id, timestamp, latitude, longitude, speed_mps}
-
-Usage:
-    python data_generator/juego_caminante.py
-    python data_generator/juego_caminante.py --moves 200 --pause 0.08
-
-EDEM. Master Big Data & Cloud 2025/2026
-Professor: Javi Briones & Adriana Campos
-"""
 from __future__ import annotations
 
 import argparse
@@ -40,8 +24,7 @@ log = logging.getLogger("juego_caminante")
 API = os.environ.get("API_BASE", "http://127.0.0.1:8080")
 PASSWORD = os.environ.get("DEMO_PASSWORD", "demo1234")
 
-# Team-contract Pub/Sub topic for walker step events.
-# Set PUBSUB_PROJECT to enable publishing; leave unset to skip (pure-HTTP run).
+# Configuración de Pub/Sub
 PUBSUB_PROJECT = os.environ.get("PUBSUB_PROJECT")
 PUBSUB_TOPIC_MOVEMENTS = os.environ.get("PUBSUB_TOPIC_MOVEMENTS", "player-movements")
 _publisher = None
@@ -49,11 +32,7 @@ _topic_path = None
 
 
 def _get_publisher():
-    """
-    Lazily import google-cloud-pubsub so the script runs without it installed.
-    Returns:
-        tuple: (publisher, topic_path) or (None, None) if disabled.
-    """
+
 
     global _publisher, _topic_path
     if _publisher is not None:
@@ -71,19 +50,7 @@ def _get_publisher():
 
 
 def publish_movement(player_id: str, lat: float, lng: float, speed_mps: float = 1.3):
-    """
-    Publish one walker event to the `player-movements` topic.
-    Fire-and-forget — errors are logged but never raised to the caller.
-    Schema follows the team contract in alvarogimenezc/DATA-PROJECT-2-EDEM.
-    Args:
-        player_id (str): Player identifier (e.g. 'demo-player-001').
-        lat (float): Latitude in decimal degrees.
-        lng (float): Longitude in decimal degrees.
-        speed_mps (float): Instantaneous speed in metres/second. Defaults
-            to 1.3 (average walking pace).
-    Returns:
-        None
-    """
+
 
     pub, topic = _get_publisher()
     if not pub:
@@ -108,16 +75,14 @@ PLAYERS = [
 ]
 NAMES = {pid: name for pid, name, _ in PLAYERS}
 
-# Valencia bounding box (matches LAT/LNG_MIN/MAX in the walker simulator)
+# Límites del mapa de Valencia y tamaño de paso
 LAT_MIN, LAT_MAX = 39.440, 39.510
 LNG_MIN, LNG_MAX = -0.420, -0.310
-# Walker step size in degrees — roughly 200-400 m per tick at this latitude.
-STEP = 0.006   # ~600 m per tick — enough to wander outside one zone
+STEP = 0.006  
 
 
 def _centroid(coords) -> tuple[float, float] | None:
-    """Average of the outer-ring vertices of a (Multi)Polygon. Good enough
-    for 'nearest zone' queries without pulling shapely."""
+
     def _extract_polygons(geom):
         t = geom.get("type")
         if t == "Polygon":
@@ -141,11 +106,7 @@ def _centroid(coords) -> tuple[float, float] | None:
 
 
 def load_zone_centroids() -> dict[str, tuple[float, float]]:
-    """Build a {zone_name_lower → (lat, lng)} map from the frontend's GeoJSON.
 
-    We key by name because the backend's zone ids don't match the GeoJSON
-    feature ids directly — names are aligned, ids are internal.
-    """
     geojson_path = Path(__file__).resolve().parents[1] / "frontend" / "public" / "valencia_districts.geojson"
     if not geojson_path.exists():
         sys.exit(f"GeoJSON not found at {geojson_path}")
@@ -222,26 +183,17 @@ def drift(point: tuple[float, float], rng: random.Random) -> tuple[float, float]
 
 
 def post(path: str, token: str, **body):
-    return requests.post(f"{API}{path}",
-                         headers={"Authorization": f"Bearer {token}"},
-                         json=body or None, timeout=5)
+    return requests.post(f"{API}{path}", headers={"Authorization": f"Bearer {token}"}, json=body or None, timeout=5)
 
 
-def act_walker(pid: str, info: dict, walker: tuple[float, float],
-               zones: list[dict], centroids: dict) -> str:
-    """One atomic action centred on the walker's location."""
+def act_walker(pid: str, info: dict, walker: tuple[float, float], zones: list[dict], centroids: dict) -> str:
     tok = info["token"]
-    me_power = int(requests.get(f"{API}/api/v1/users/me",
-                                headers={"Authorization": f"Bearer {tok}"},
-                                timeout=5).json().get("power_points") or 0)
-    # Auto-refill when the walker is broke: every player walks 5 000 more
-    # steps (+50 power_points) on demand. Keeps a long game from dead-locking
-    # once the initial 10 000-step bootstrap is spent.
+    me_power = int(requests.get(f"{API}/api/v1/users/me", headers={"Authorization": f"Bearer {tok}"}, timeout=5).json().get("power_points") or 0)
+    
+    # Recarga automática si el jugador se queda sin pasos
     if me_power < 5:
         post("/api/v1/steps/sync", tok, steps=5000)
-        me_power = int(requests.get(f"{API}/api/v1/users/me",
-                                    headers={"Authorization": f"Bearer {tok}"},
-                                    timeout=5).json().get("power_points") or 0)
+        me_power = int(requests.get(f"{API}/api/v1/users/me", headers={"Authorization": f"Bearer {tok}"}, timeout=5).json().get("power_points") or 0)
 
     target = nearest_zone(walker, zones, centroids)
     if not target:
@@ -261,7 +213,7 @@ def act_walker(pid: str, info: dict, walker: tuple[float, float],
         return f"REINF  {tname:22s} +{amt}"
 
     if owner and owner != pid:
-        # Attack from our own zone whose centroid is nearest to the walker.
+       
         owned = [z for z in zones if (z.get("owner_clan_id") or z.get("owner")) == pid
                  and int(z.get("defense_level") or 0) >= 2]
         if not owned:
@@ -303,11 +255,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _bootstrap(args: argparse.Namespace, rng: random.Random):
-    """Carga centroides, loguea los 4 jugadores demo, lanza /turn/setup y
-    posiciona inicialmente los 4 walkers en puntos aleatorios de Valencia.
 
-    Devuelve `(tokens, centroids, walkers)` listos para `_game_loop`.
-    """
     centroids = load_zone_centroids()
     print(f"Loaded {len(centroids)} zone centroids from GeoJSON.")
 
@@ -328,10 +276,7 @@ def _bootstrap(args: argparse.Namespace, rng: random.Random):
 
 
 def _game_loop(args: argparse.Namespace, rng: random.Random, tokens, centroids, walkers):
-    """Bucle de turnos: cada iteración consulta de quién es el turno, mueve
-    al walker correspondiente, ejecuta su acción, publica el paso y termina
-    su turno.
-    """
+
     for move in range(1, args.moves + 1):
         turn = requests.get(f"{API}/api/v1/turn/", timeout=5).json()
         pid = turn["current_player_id"]
@@ -345,10 +290,7 @@ def _game_loop(args: argparse.Namespace, rng: random.Random, tokens, centroids, 
         w = walkers[pid]
         print(f"move {move:3d}  {NAMES[pid]:6s}  walker=({w[0]:.4f},{w[1]:.4f})  {note}")
 
-        # Publish the walker step to the `player-movements` topic (team
-        # contract). Speed is derived from the drift step size (approx
-        # 600 m per move); we divide by the default pause of 0.06s to get
-        # a plausible walking speed ~1.3 m/s.
+        
         walk_speed = STEP * 111_000 / max(0.001, args.pause)  # ° → m / s
         publish_movement(pid, w[0], w[1], speed_mps=min(walk_speed, 2.5))
 

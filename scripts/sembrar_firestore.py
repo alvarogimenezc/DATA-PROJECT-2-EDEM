@@ -1,34 +1,17 @@
 #!/usr/bin/env python3
-"""Push demo data into a real Firestore project.
+"""
+Script para poblar Firestore con datos básicos de prueba.
 
-Reads:
-  - data/players.json              → users collection
-  - backend/cloudrisk_api/database/almacen_en_memoria.py::VALENCIA_ZONES
-                                   → zones collection
+Lee de:
+  - data/players.json (usuarios)
+  - backend/cloudrisk_api/database/almacen_en_memoria.py (zonas de Valencia)
 
-Targets:
-  - Real Firestore in --project (default: $PROJECT_ID env var)
-  - Or the local emulator if FIRESTORE_EMULATOR_HOST is set (e.g.
-    "localhost:8200" — same value that docker-compose injects).
-
-Authentication:
-  - For real Firestore, run `gcloud auth application-default login` first.
-    The google-cloud-firestore client picks up your ADC automatically.
-  - For the emulator, no auth is needed; the env var is enough.
-
-Usage:
-    # against your team project
+Uso:
+    # Subir al proyecto real
     python scripts/sembrar_firestore.py --project cloudrisk-492619
 
-    # against the local emulator (start it first via docker compose up)
-    FIRESTORE_EMULATOR_HOST=localhost:8200 python scripts/sembrar_firestore.py \\
-        --project cloudrisk-local
-
-    # dry-run: show what would be written, don't actually write
+    # Ver qué haría sin subir nada (Simulación)
     python scripts/sembrar_firestore.py --project cloudrisk-492619 --dry-run
-
-The script is idempotent: it uses .set() with merge=True so re-running
-it just refreshes the documents instead of creating duplicates.
 """
 from __future__ import annotations
 
@@ -116,7 +99,7 @@ def main() -> None:
             print(f"  ...and {len(zones) - 3} more zone-balance docs")
         return
 
-    # Lazy import so --dry-run works without google-cloud-firestore installed.
+    
     try:
         from google.cloud import firestore
     except ImportError:
@@ -159,9 +142,7 @@ def main() -> None:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
 
-        # user_balance/{player_id} = { armies, total_steps, updated_at, +username, +email }
-        # The TEAM contract only requires armies/total_steps/updated_at; username and
-        # email are extra readability fields the team pipeline simply ignores.
+        
         for p in players:
             user_id = p.get("id") or str(uuid.uuid4())
             db.collection(args.user_balance_collection).document(user_id).set({
@@ -173,7 +154,7 @@ def main() -> None:
             }, merge=True)
         print(f"  ok {len(players)} player balances written to {args.user_balance_collection}/ (team schema)")
 
-        # location_balance/{location_id} = { armies, owner, updated_at, +location_name }
+        
         for z in zones:
             db.collection(args.location_balance_collection).document(z["id"]).set({
                 "armies": 0,

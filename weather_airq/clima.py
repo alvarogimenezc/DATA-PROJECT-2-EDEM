@@ -123,18 +123,14 @@ def _build_message(data: dict) -> dict:
     }
 
 #cada 30 segundos pide los datos, los empaqueta y los envía. Si internet falla, no se apaga, solo avisa del error y lo vuelve a intentar en la siguiente ronda.
+# Borras el while True y el sleep. El main se queda así de simple:
 def main() -> None:
-
-    log.info("Starting weather ingestor (mode=%s, interval=%ds)",
-             "MOCK" if MOCK else "REAL", INTERVAL_S)
-    while True:
-        try:
-            data = fetch_mock() if MOCK else fetch_real()
-            emit(_build_message(data))
-        except Exception as exc:
-            log.warning("ingest cycle failed: %s", exc)
-        time.sleep(INTERVAL_S)
-
+    log.info("Ejecutando ingestor una sola vez...")
+    try:
+        data = fetch_mock() if MOCK else fetch_real()
+        emit(_build_message(data))
+    except Exception as exc:
+        log.warning("ingest cycle failed: %s", exc)
 
 if __name__ == "__main__":
     main()

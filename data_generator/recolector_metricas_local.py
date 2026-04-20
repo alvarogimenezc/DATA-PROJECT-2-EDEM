@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""
-CloudRISK — Local Metrics Collector
 
-Local-only replacement for the Pub/Sub → BigQuery Dataflow step.
-It subscribes to Pub/Sub emulator subscriptions and appends events to JSONL files
-in a shared volume, which the Streamlit dashboard can read.
-"""
 
 from __future__ import annotations
 

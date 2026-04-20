@@ -1,15 +1,7 @@
 #!/usr/bin/env python3
-"""
-CloudRISK — FAST 4-bot match for demos.
+# Simulación rápida de CloudRisk para presentaciones y demos en vivo.
+# Ejecuta la lógica del juego secuencialmente sin pausas largas.
 
-Unlike bot_ia_riesgo.py which runs one thread per bot and paces by sleep,
-this script walks the game sequentially as fast as the API allows. Useful
-for recording a short preview clip: you'll see ~1 move per ~100 ms.
-
-Same heuristic as the long-running bot, but turns advance on every move
-and the loop stops once a player owns >= WIN_THRESHOLD zones or we hit
-MAX_MOVES.
-"""
 from __future__ import annotations
 
 import random
@@ -31,8 +23,8 @@ NAMES = {
     "demo-player-003": "Este",   "demo-player-004": "Oeste",
 }
 
-WIN_THRESHOLD = 30   # first player to own >=30 zones wins the demo
-MAX_MOVES     = 400  # safety cap
+WIN_THRESHOLD = 30   # Zonas necesarias para ganar la demo
+MAX_MOVES     = 400  # Límite de seguridad
 
 rng = random.Random(1234)
 
@@ -85,7 +77,7 @@ def print_standings(moves, owners):
 
 
 def act(player_id, info, zones):
-    """One atomic action: place or attack, then end the turn."""
+   
     tok = info["token"]
     me_power = int(get("/api/v1/users/me", tok).get("power_points") or 0)
     owned = [z for z in zones if z.get("owner_clan_id") == player_id]
@@ -120,7 +112,7 @@ def act(player_id, info, zones):
                           f"  (−{j.get('attacker_losses')} / −{j.get('defender_losses')})")
                     return True
 
-    # reinforce weakest
+    
     if owned and me_power > 0:
         w = min(owned, key=lambda z: int(z.get("defense_level") or 0))
         post("/api/v1/armies/place", tok, location_id=w["id"], amount=min(me_power, 3))
@@ -146,7 +138,6 @@ def main():
             break
         _, zones = standings()
         act(pid, tokens[pid], zones)
-        # end the turn to rotate
         post("/api/v1/turn/end", tokens[pid]["token"])
 
         if move % 20 == 0:
@@ -162,7 +153,7 @@ def main():
             print_standings(move, owners)
             return
 
-        time.sleep(0.08)   # tiny pause so the frontend can catch up
+        time.sleep(0.08)
 
     print("\nMax moves reached, game stalled. Final state:")
     owners, _ = standings()
