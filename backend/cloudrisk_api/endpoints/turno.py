@@ -7,7 +7,6 @@ import os
 import random
 import unicodedata
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -16,14 +15,11 @@ from cloudrisk_api.configuracion import settings
 from cloudrisk_api.database import usuarios as usuarios_repo, zonas as zonas_repo
 from cloudrisk_api.services.autenticacion import get_current_user
 from cloudrisk_api.services import estado_juego as game_state
+from cloudrisk_api.services.adyacencia import GEOJSON_PATH as _GEOJSON_PATH
 
 USE_LOCAL = os.environ.get("USE_LOCAL_STORE", "0") == "1"
 
 
-# ─── GeoJSON de Valencia cargado del frontend/public (single source of truth) ──
-_GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_districts.geojson"
-if not _GEOJSON_PATH.exists():
-    _GEOJSON_PATH = Path("/app/geojson/valencia_districts.geojson")  # Docker mount
 _CENTROID_CACHE: dict[str, tuple[float, float]] | None = None
 
 
@@ -237,13 +233,7 @@ def advance_phase(current_user: dict = Depends(get_current_user)):
 
 @router.post("/end")
 def end_turn(current_user: dict = Depends(get_current_user)):
-    """
-    Termina tu turno. El jugador ACTUAL recibe sus refuerzos (por las zonas
-    que controla ahora) y luego el turno pasa al siguiente.
-
-    Fix: antes se daba el bonus al SIGUIENTE jugador en lugar de al actual,
-    así que el humano nunca recibía sus tropas y los bots las recibían doble.
-    """
+    """Termina tu turno: el jugador actual recibe sus refuerzos y pasa al siguiente."""
     state = game_state.current()
     if state.current_player_id != current_user["id"]:
         raise HTTPException(status_code=403, detail="It's not your turn")

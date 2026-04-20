@@ -110,7 +110,7 @@ resource "google_cloud_run_v2_service" "web" {
       resources {
         limits = {
           cpu    = "1"
-          memory = "256Mi" # frontend estatico — 256MB sobran
+          memory = "512Mi" # mínimo con CPU always-allocated
         }
       }
     }
@@ -176,7 +176,7 @@ resource "google_cloud_run_v2_service" "air_ingestor" {
       resources {
         limits = {
           cpu    = "1"
-          memory = "256Mi"
+          memory = "512Mi" # mínimo con min_instances=1 (CPU always-allocated)
         }
       }
     }

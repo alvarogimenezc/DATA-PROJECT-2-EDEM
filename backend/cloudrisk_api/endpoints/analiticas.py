@@ -13,27 +13,36 @@ request.
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 
-# ─── Cache TTL en memoria ─────────────────────────────────────────────────────
+# ─── Cache TTL en memoria (bounded LRU) ───────────────────────────────────────
 _TTL_S = 60.0
-_cache: dict[str, tuple[float, Any]] = {}
+_CACHE_MAX = 128
+_cache: "OrderedDict[str, tuple[float, Any]]" = OrderedDict()
 
 
 def _cached(key: str, fn):
     now = time.time()
     hit = _cache.get(key)
     if hit and (now - hit[0] < _TTL_S):
+        _cache.move_to_end(key)
         return hit[1]
     data = fn()
     _cache[key] = (now, data)
+    _cache.move_to_end(key)
+    while len(_cache) > _CACHE_MAX:
+        _cache.popitem(last=False)
     return data
 
 
@@ -65,7 +74,7 @@ def _run(query: str) -> list[dict]:
     except Exception as exc:
         # El frontend debe poder pintar "sin datos aún" sin que el backend
         # devuelva 500. Logueamos y seguimos.
-        print(f"[analytics] BigQuery unavailable: {exc}")
+        logger.warning(f"BigQuery unavailable: {exc}")
         return []
     out = []
     for r in rows:

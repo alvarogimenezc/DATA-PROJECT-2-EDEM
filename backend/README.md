@@ -34,8 +34,17 @@ Todas las rutas van bajo `/api/v1`. Autenticación por JWT (Bearer token).
 | `misiones.py` | `/missions` | Misiones diarias con recompensas |
 | `multiplicadores.py` | `/multipliers` | Multiplicador ambiental (aire × clima) |
 | `analiticas.py` | `/analytics` | Consultas analíticas a BigQuery |
+| `simulador.py` | `/simulate_bots` | Turno de bots tras `/turn/end` (botón "Simular bots" del lobby) |
 | `compatibilidad_equipo.py` | `/state`, `/actions` | Rutas de compatibilidad con el contrato del equipo |
-| `batallas.py` ⚠️ | `/battles` | Sistema de combate legacy (deprecated) |
+| `batallas.py` ⚠️ | `/battles` | Historial + resolución manual/cron (router `deprecated=True`; la ruta canónica de combate es `POST /zones/{id}/attack`) |
+
+### Eventos WebSocket (`/ws`)
+
+El backend empuja eventos al frontend por WebSocket; el cliente los trata como invalidadores del estado:
+
+- `game_state_update`, `zone_updated`, `turn_changed`
+- `battle_started`, `battle_resolved`
+- `location_update`, `step_update`
 
 ---
 
@@ -49,7 +58,6 @@ Todas las rutas van bajo `/api/v1`. Autenticación por JWT (Bearer token).
 | `gestor_websocket.py` | Gestiona conexiones WebSocket (broadcast y mensajes) |
 | `multiplicadores.py` | Caché del multiplicador ambiental |
 | `adyacencia.py` | Grafo de adyacencia entre barrios (desde GeoJSON) |
-| `asesor_ia.py` | Consejo táctico para batallas (determinista) |
 
 ---
 

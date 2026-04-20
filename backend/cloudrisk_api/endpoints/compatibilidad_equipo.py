@@ -81,8 +81,7 @@ class PlaceResult(BaseModel):
             summary="Team contract: a player's balance")
 def get_player_state(player_id: str):
     """Return the player's armies + step count. Adapts our richer user doc."""
-    user = usuarios_repo.get_user_by_id(player_id) if hasattr(usuarios_repo, "get_user_by_id") \
-        else _lookup_user(player_id)
+    user = usuarios_repo.get_user_by_id(player_id)
     if not user:
         raise HTTPException(status_code=404, detail=f"player {player_id} not found")
     return UserState(
@@ -154,7 +153,7 @@ def place_armies(
             detail="armies (or amount) must be > 0",
         )
 
-    user = _lookup_user(player_id)
+    user = usuarios_repo.get_user_by_id(player_id)
     if not user:
         raise HTTPException(status_code=404, detail=f"player {player_id} not found")
     zone = zonas_repo.get_zone_by_id(action.location_id)
@@ -190,22 +189,6 @@ def place_armies(
 
 
 # ─── helpers ─────────────────────────────────────────────────────────
-
-def _lookup_user(player_id: str) -> dict | None:
-    """Our usuarios_repo lacks a get_by_id shortcut; stream and filter."""
-    if hasattr(usuarios_repo, "get_user_by_id"):
-        return usuarios_repo.get_user_by_id(player_id)
-    # Fallback: linear scan — in-memory store has <10 users in practice
-    import os
-    if os.environ.get("USE_LOCAL_STORE", "0") == "1":
-        from cloudrisk_api.database import almacen_en_memoria as store
-        for u in store.doc_stream("users"):
-            if u.get("id") == player_id:
-                return u
-        return None
-    # Firestore path: handled by the real repo
-    return None
-
 
 def _iso_now() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
