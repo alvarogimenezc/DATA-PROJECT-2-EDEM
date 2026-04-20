@@ -74,6 +74,7 @@ resource "google_cloud_run_v2_service" "api" {
   depends_on = [
     google_project_service.apis,
     google_secret_manager_secret_iam_member.api_jwt_access,
+    null_resource.image_api,
   ]
 }
 
@@ -119,7 +120,10 @@ resource "google_cloud_run_v2_service" "web" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [
+    google_project_service.apis,
+    null_resource.image_frontend,
+  ]
 }
 
 resource "google_cloud_run_v2_service_iam_member" "web_public" {
@@ -182,7 +186,10 @@ resource "google_cloud_run_v2_service" "air_ingestor" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [
+    google_project_service.apis,
+    null_resource.image_air_ingestor,
+  ]
 }
 
 # =============================================================================
@@ -230,7 +237,10 @@ resource "google_cloud_run_v2_service" "weather_ingestor" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [
+    google_project_service.apis,
+    null_resource.image_weather_ingestor,
+  ]
 }
 
 # =============================================================================
@@ -272,5 +282,8 @@ resource "google_cloud_run_v2_job" "walker" {
     }
   }
 
-  depends_on = [google_project_service.apis]
+  depends_on = [
+    google_project_service.apis,
+    null_resource.image_walker,
+  ]
 }

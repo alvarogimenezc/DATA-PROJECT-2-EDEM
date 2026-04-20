@@ -1,18 +1,4 @@
-"""
-CloudRISK — Air Quality Ingestor
-Polls OpenWeatherMap's air pollution API for Valencia every 30 seconds
-and publishes a normalised multiplier to Pub/Sub topic `air-quality`.
-
-Two execution modes:
-    - real:  uses OPENWEATHER_API_KEY (via Secret Manager in Cloud Run)
-    - mock:  generates synthetic AQI values when the key is absent
-
-Contract multiplier range: 0.6 (worst air) to 1.5 (best air).
-Formula: multiplier = 1.5 - (AQI - 1) * 0.225    for AQI ∈ {1,2,3,4,5}
-
-EDEM. Master Big Data & Cloud 2025/2026
-Professor: Javi Briones & Adriana Campos
-"""
+#Ingestor de Calidad del Aire. Su función es actuar como un sensor que alimenta nuestro juego cada 30 segundos.
 from __future__ import annotations
 
 import json
@@ -24,30 +10,30 @@ from datetime import datetime, timezone
 
 import requests
 
+#Definimos dónde estamos (Valencia) y cada cuanto tiempo trabajaremos (30 segundos)
 LAT = "39.47391"
 LON = "-0.37966"
 CITY = "Valencia"
 INTERVAL_S = int(os.environ.get("INGEST_INTERVAL_SECONDS", "30"))
 
+#Con las variables de entorno busca las contraseñas, si no encuentra la API_KEY, activa automáticamente el modo simulacro (Mock)
 API_KEY = os.environ.get("OPENWEATHER_API_KEY") or os.environ.get("CLAVE_API")
 MOCK = not API_KEY
 
 PUBSUB_PROJECT = os.environ.get("PUBSUB_PROJECT")
-PUBSUB_TOPIC = os.environ.get("PUBSUB_TOPIC_AIR", "air-quality")  # team contract
+PUBSUB_TOPIC = os.environ.get("PUBSUB_TOPIC_AIR", "air-quality") 
 BACKEND_INGEST_URL = os.environ.get("BACKEND_INGEST_URL")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("air_quality")
 
-
+#Lógica del negocio. Calidad del aire. Recibe la contaminación real (de 1 al 5) y la convierte en el multiplicador de tropas.
 def _multiplier_from_aqi(aqi: int) -> float:
-    """Team formula. AQI 1 → 1.5 (best), AQI 5 → 0.6 (worst)."""
+#Nos aseguramos de que el resultado nunca sea menor de 0.6 (penalización máxima) ni mayor de 1.5 (bonus máximo).
     return round(max(0.6, min(1.5, 1.5 - (aqi - 1) * 0.225)), 3)
 
-
-def fetch_real() -> dict:
-    """Llama a la Air Pollution API y aplana la respuesta a `(ts, aqi, components)`.
-    Si la red falla, `raise_for_status()` lo propaga al bucle principal."""
+#se conecta a OpenWeather, se baja el JSON con la contaminación de Valencia, saca solo la información necesaria y lo devuelve limpio.
+def fetch_real() -> dict: 
     url = (
         "https://api.openweathermap.org/data/2.5/air_pollution"
         f"?lat={LAT}&lon={LON}&appid={API_KEY}"
@@ -61,11 +47,9 @@ def fetch_real() -> dict:
         "components": item["components"],
     }
 
-
+#hace lo mismo pero con datos generados aleatoriamente.
 def fetch_mock() -> dict:
-    """Genera muestras AQI sintéticas. Sesgo hacia 1-3 (la mayoría de días en
-    Valencia son aceptables); ocasionalmente 4-5 para que el frontend pueda
-    pintar también casos 'malo'."""
+
     weights = [0.4, 0.3, 0.2, 0.07, 0.03]   # AQI 1..5
     aqi = random.choices([1, 2, 3, 4, 5], weights=weights)[0]
     return {
@@ -80,16 +64,9 @@ def fetch_mock() -> dict:
         },
     }
 
-
+#Arranca el motor de Pub/Sub, busca el Topic air-quality y dispara el mensaje hacia la nube. 
+#Si no hay Google Cloud configurado, simplemente lo imprime en tu pantalla para poder probarlo localmente.
 def emit(message: dict) -> None:
-    """Publica el mensaje según el sink disponible (mismo orden que `clima.py`):
-
-      1. `PUBSUB_PROJECT` → topic `air-quality` (modo prod / Dataflow).
-      2. `BACKEND_INGEST_URL` → POST HTTP al backend (modo single-host).
-      3. ninguno → vuelca a stdout (modo dev).
-
-    El primer match gana (early return).
-    """
     payload = json.dumps(message)
     if PUBSUB_PROJECT:
         from google.cloud import pubsub_v1   # lazy import
@@ -105,7 +82,7 @@ def emit(message: dict) -> None:
         return
     print(payload, flush=True)
 
-
+#Coge los datos brutos recién extraídos y los estructura en el esquema JSON que viaja hacia el pipeline
 def _build_message(data: dict) -> dict:
     """Convierte la respuesta cruda en el JSON a publicar. El nombre del
     campo `indice_multiplicador_aire` es contrato con el pipeline Dataflow
@@ -120,17 +97,17 @@ def _build_message(data: dict) -> dict:
         "source": "mock" if MOCK else "openweathermap",
     }
 
-
+#bucle infinito a prueba de fallos. Cada 30 segundos repite este ciclo exacto: Lee los datos del aire, 
+#calcula el multiplicador y envía el mensaje a la nube.
+# si internet falla, avisa del error y espera 30 segundos para volver a intentarlo.
 def main() -> None:
-    """Bucle infinito de ingest cada `INTERVAL_S` segundos. Los errores
-    ocasionales se loguean y se reintenta en el siguiente tick."""
     log.info("Starting air_quality ingestor (mode=%s, interval=%ds)",
              "MOCK" if MOCK else "REAL", INTERVAL_S)
     while True:
         try:
             data = fetch_mock() if MOCK else fetch_real()
             emit(_build_message(data))
-        except Exception as exc:   # noqa: BLE001
+        except Exception as exc:  
             log.warning("ingest cycle failed: %s", exc)
         time.sleep(INTERVAL_S)
 

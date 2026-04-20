@@ -92,10 +92,6 @@ def pubsub_publish(topic: str, message: dict):
     _pubsub_log.append({"topic": topic, "message": message, "timestamp": _now_iso()})
 
 
-def pubsub_get_log() -> List[dict]:
-    return list(_pubsub_log)
-
-
 # ══════════════════════════════════════════════════
 #  Seed data: Valencia zones
 # ══════════════════════════════════════════════════

@@ -1,126 +1,79 @@
 #!/bin/bash
-# CloudRISK — GCP Deploy Script
-# Usage: ./deploy.sh <project-id> [region]
+# CloudRISK — Bootstrap previo a Terraform.
 #
-# Required env vars:
-#   JWT_SECRET   — JWT signing secret for the API
+# Terraform no puede crear su propio bucket de state (necesita uno antes de
+# correr `terraform init`). Tampoco se auto-loguea en GCP ni configura Docker.
+# Este script hace esas 4 cosas, que solo hay que hacer UNA vez por máquina:
+#
+#   1) gcloud auth login + application-default login
+#   2) Crear el bucket GCS donde vive el tfstate (versioned)
+#   3) Habilitar las 2 APIs mínimas que Terraform necesita SÍ O SÍ para arrancar
+#   4) gcloud auth configure-docker — para que los null_resource de
+#      13_docker_builds.tf puedan hacer `docker push` al Artifact Registry
+#
+# Cuando termine, sigue con:
+#   cd infrastructure/terraform
+#   terraform init
+#   terraform plan
+#   terraform apply
+#
+# Uso:
+#   bash infrastructure/deploy.sh <project-id> [region]
 
 set -euo pipefail
 
-PROJECT_ID="${1:?Usage: deploy.sh <project-id> [region]}"
+PROJECT_ID="${1:?Uso: deploy.sh <project-id> [region]}"
 REGION="${2:-europe-west1}"
-REPO="cloudrisk-images"                         # team contract name
-STATE_BUCKET="${PROJECT_ID}-terraform-state"     # per-project to avoid clashes
+STATE_BUCKET="${PROJECT_ID}-tfstate"
 
-: "${JWT_SECRET:?Set JWT_SECRET env var}"
+echo "=== CloudRISK — bootstrap previo a Terraform ==="
+echo "Proyecto:      ${PROJECT_ID}"
+echo "Region:        ${REGION}"
+echo "State bucket:  gs://${STATE_BUCKET}"
+echo ""
 
-echo "=================================="
-echo "  CloudRISK — Deploying to GCP"
-echo "  Project : $PROJECT_ID"
-echo "  Region  : $REGION"
-echo "=================================="
-
-# ─── 0. Authenticate & set project ───────────────────────────────────────────
+# ─── 1) Login en GCP ─────────────────────────────────────────────────────────
+# Si ya estás logueado, gcloud no vuelve a abrir el navegador.
+echo "[1/4] gcloud auth login..."
+gcloud auth login --brief
+gcloud auth application-default login
 gcloud config set project "$PROJECT_ID"
 
-# ─── 1. Enable required APIs ─────────────────────────────────────────────────
-echo "[1/6] Enabling GCP APIs..."
+# ─── 2) Bucket GCS para el tfstate ──────────────────────────────────────────
+# Versioned para que cualquier cagada sea reversible. Si ya existe, no falla.
+echo ""
+echo "[2/4] Creando bucket de tfstate (si no existe)..."
+if gcloud storage buckets describe "gs://${STATE_BUCKET}" >/dev/null 2>&1; then
+  echo "    (ya existe)"
+else
+  gcloud storage buckets create "gs://${STATE_BUCKET}" --location="$REGION"
+fi
+gcloud storage buckets update "gs://${STATE_BUCKET}" --versioning
+
+# ─── 3) Habilitar APIs mínimas para que Terraform pueda arrancar ────────────
+# Terraform luego habilita el resto en 01_apis.tf, pero estas 2 las necesita
+# ANTES del primer `apply` (Artifact Registry para el push de imágenes y
+# Cloud Resource Manager para el flujo de IAM que usa el propio Terraform).
+echo ""
+echo "[3/4] Habilitando APIs mínimas..."
 gcloud services enable \
-  run.googleapis.com \
-  firestore.googleapis.com \
-  pubsub.googleapis.com \
-  bigquery.googleapis.com \
-  secretmanager.googleapis.com \
   artifactregistry.googleapis.com \
-  cloudbuild.googleapis.com \
-  iam.googleapis.com
+  cloudresourcemanager.googleapis.com
 
-# ─── 2. Create Artifact Registry repo ────────────────────────────────────────
-echo "[2/6] Creating Artifact Registry..."
-gcloud artifacts repositories create "$REPO" \
-  --repository-format=docker \
-  --location="$REGION" \
-  --description="CloudRISK Docker images" \
-  --quiet 2>/dev/null || echo "  (already exists)"
-
+# ─── 4) Auth de Docker contra el Artifact Registry de la región ─────────────
+# Lo necesitan los null_resource de 13_docker_builds.tf para hacer docker push.
+echo ""
+echo "[4/4] Configurando Docker auth contra Artifact Registry..."
 gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 
-# ─── 3. Terraform — provision infrastructure ─────────────────────────────────
-echo "[3/6] Provisioning infrastructure with Terraform..."
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "${SCRIPT_DIR}/terraform"
-
-# Create GCS bucket for Terraform state (first time only)
-gsutil mb -l "$REGION" "gs://${STATE_BUCKET}" 2>/dev/null || true
-gsutil versioning set on "gs://${STATE_BUCKET}"
-
-terraform init \
-  -backend-config="bucket=${STATE_BUCKET}"
-
-terraform apply \
-  -var="project_id=${PROJECT_ID}" \
-  -var="region=${REGION}" \
-  -var="jwt_secret=${JWT_SECRET}" \
-  -auto-approve
-
-cd - > /dev/null
-
-# ─── 4. Build & push Docker images ───────────────────────────────────────────
-echo "[4/6] Building and pushing Docker images..."
-REGISTRY="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPO}"
-CODE_DIR="${SCRIPT_DIR}/.."                     # flattened: repo root is one level up
-
-# API (la analítica está integrada aquí vía endpoints /analytics/*)
-docker build -t "${REGISTRY}/api:latest" "${CODE_DIR}/backend"
-docker push "${REGISTRY}/api:latest"
-
-# ─── 5. Deploy API first ─────────────────────────────────────────────────────
-echo "[5/6] Deploying to Cloud Run..."
-
-gcloud run deploy cloudrisk-api \
-  --image="${REGISTRY}/api:latest" \
-  --region="$REGION" \
-  --platform=managed \
-  --allow-unauthenticated \
-  --min-instances=1 \
-  --max-instances=10 \
-  --memory=512Mi \
-  --service-account="cloudrisk-api@${PROJECT_ID}.iam.gserviceaccount.com"
-
-# Get real API URL (Cloud Run URLs are not guessable)
-API_URL=$(gcloud run services describe cloudrisk-api \
-  --region="$REGION" --format="value(status.url)")
-echo "  API URL: $API_URL"
-
-# Derive WebSocket URL from API URL (https → wss)
-WS_URL=$(echo "$API_URL" | sed 's|^https|wss|')
-
-# Build frontend with the real API and WebSocket URLs baked in
-docker build \
-  --build-arg "VITE_API_URL=${API_URL}" \
-  --build-arg "VITE_WS_URL=${WS_URL}" \
-  -t "${REGISTRY}/frontend:latest" \
-  "${CODE_DIR}/frontend"
-docker push "${REGISTRY}/frontend:latest"
-
-gcloud run deploy cloudrisk-web \
-  --image="${REGISTRY}/frontend:latest" \
-  --region="$REGION" \
-  --platform=managed \
-  --allow-unauthenticated \
-  --min-instances=0 \
-  --max-instances=5 \
-  --memory=256Mi
-
-# ─── 6. Print URLs ────────────────────────────────────────────────────────────
 echo ""
-echo "[6/6] Deploy complete!"
+echo "=== Bootstrap OK ==="
 echo ""
-echo "  API       : $(gcloud run services describe cloudrisk-api --region=$REGION --format='value(status.url)')"
-echo "  Frontend  : $(gcloud run services describe cloudrisk-web --region=$REGION --format='value(status.url)')"
+echo "Siguiente paso — corre:"
+echo "  cd infrastructure/terraform"
+echo "  terraform init"
+echo "  terraform plan"
+echo "  terraform apply"
 echo ""
-echo "To set up CI/CD trigger:"
-echo "  gcloud builds triggers create github \\"
-echo "    --repo-name=<your-repo> \\"
-echo "    --branch-pattern='^main$' \\"
-echo "    --build-config=CICD/cloudbuild.yaml"
+echo "Y después, una sola vez, sube la key real de OpenWeatherMap:"
+echo "  echo -n 'TU_KEY' | gcloud secrets versions add openweather-api-key --data-file=-"

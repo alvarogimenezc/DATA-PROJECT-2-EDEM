@@ -21,7 +21,9 @@ USE_LOCAL = os.environ.get("USE_LOCAL_STORE", "0") == "1"
 
 
 # ─── GeoJSON de Valencia cargado del frontend/public (single source of truth) ──
-_GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_barrios_clean.geojson"
+_GEOJSON_PATH = Path(__file__).resolve().parents[3] / "frontend" / "public" / "valencia_districts.geojson"
+if not _GEOJSON_PATH.exists():
+    _GEOJSON_PATH = Path("/app/geojson/valencia_districts.geojson")  # Docker mount
 _CENTROID_CACHE: dict[str, tuple[float, float]] | None = None
 
 
@@ -236,14 +238,17 @@ def advance_phase(current_user: dict = Depends(get_current_user)):
 @router.post("/end")
 def end_turn(current_user: dict = Depends(get_current_user)):
     """
-    Termina tu turno. El backend rota al siguiente jugador Y LE CONCEDE
-    sus refuerzos automáticamente (Risk rule: max(3, zones/3) armies).
+    Termina tu turno. El jugador ACTUAL recibe sus refuerzos (por las zonas
+    que controla ahora) y luego el turno pasa al siguiente.
+
+    Fix: antes se daba el bonus al SIGUIENTE jugador en lugar de al actual,
+    así que el humano nunca recibía sus tropas y los bots las recibían doble.
     """
     state = game_state.current()
     if state.current_player_id != current_user["id"]:
         raise HTTPException(status_code=403, detail="It's not your turn")
+    bonus_info = _grant_turn_bonus(current_user["id"])
     new_state = game_state.end_turn()
-    bonus_info = _grant_turn_bonus(new_state.current_player_id)
     return {**new_state.to_dict(), "bonus_granted": bonus_info}
 
 
@@ -341,50 +346,23 @@ def _apply_zone_assignments(
         })
 
 
-@router.post("/setup", tags=["setup"])
-def setup_game(
-    x_scheduler_token: Optional[str] = Header(None, alias="X-Scheduler-Token"),
-    current_user: dict = Depends(get_current_user),
-):
+def _run_setup() -> dict:
+    """Núcleo del setup — idempotente, sin auth. Devuelve el mismo dict que
+    el endpoint. Reutilizable desde:
+      - `POST /turn/setup` (trigger manual / scheduler).
+      - `ensure_game_setup()` (auto-arranque del backend en local).
+
+    Raises `RuntimeError` si no hay zonas sembradas o hay menos de 10 con
+    geojson — el llamador decide si convertirlo en 500 o en log+skip.
     """
-    Fase de preparación v3 (Clustered Risk).
-
-    Pasos:
-        1. Calcula el centroide (lat, lng) de cada zona desde su geojson.
-        2. Elige 4 semillas geográficamente SEPARADAS (una norte, sur,
-           este, oeste) — son los centros iniciales de cada jugador.
-        3. Para cada zona no-semilla, encuentra su semilla más cercana.
-           Asigna las ZONES_PER_PLAYER_TARGET (15) zonas más cercanas a
-           cada semilla. Las demás quedan LIBRES (owner_clan_id=None,
-           defense_level=0).
-        4. Coloca MIN_ARMIES_PER_ZONE armies en cada zona asignada.
-           Las libres se quedan a 0 armies (se reclaman con /actions/place).
-        5. Cada jugador recibe STARTING_POOL (20) armies como power_points
-           para desplegar donde quiera (reforzar o reclamar zonas libres).
-        6. Resetea el turno: Norte, fase reinforce, turno 1.
-
-    Resultado: ~60 zonas repartidas (15 por jugador, clusterizadas) +
-    ~26 zonas libres que cualquiera puede reclamar en su turno.
-
-    Seguridad: fuera de USE_LOCAL_STORE=1 el endpoint exige también
-    X-Scheduler-Token (Cloud Scheduler / ops) para evitar que cualquier
-    jugador autenticado resetee la partida en demo/producción.
-    """
-    # En prod: se requiere el token de ops además del usuario logueado.
-    # En local: permitimos cualquier usuario autenticado para que los
-    # scripts de data_generator y los tests sigan funcionando sin token.
-    if not USE_LOCAL and x_scheduler_token != settings.SCHEDULER_SECRET:
-        raise HTTPException(status_code=403, detail="Forbidden: scheduler token required")
     zones = zonas_repo.list_zones()
     if not zones:
-        raise HTTPException(status_code=500, detail="No zones seeded")
+        raise RuntimeError("No zones seeded")
 
-    # Pasos 1+2 — centroides y semillas.
     zones_with_centroid = _compute_zones_with_centroid(zones)
     if len(zones_with_centroid) < 10:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Too few zones with geojson to cluster ({len(zones_with_centroid)})",
+        raise RuntimeError(
+            f"Too few zones with geojson to cluster ({len(zones_with_centroid)})"
         )
 
     rng = random.Random()
@@ -392,25 +370,19 @@ def setup_game(
     order = game_state.DEFAULT_PLAYER_ORDER
     seed_owners = dict(zip(order, seeds))
 
-    # Paso 3 — clustering greedy round-robin por cercanía a semilla.
     assignments, taken = _assign_zones_to_players(zones_with_centroid, seeds, order)
 
-    # Conjuntos derivados: las zonas SIN geojson y las que quedaron fuera del
-    # round-robin se marcan ambas como libres (cualquiera las puede reclamar).
     all_cluster_ids = {z["id"] for z, _ in zones_with_centroid}
     all_db_ids = {z["id"] for z in zones}
     free_in_cluster = all_cluster_ids - taken
     free_no_geo = all_db_ids - all_cluster_ids
     free_ids = free_in_cluster | free_no_geo
 
-    # Paso 4 — persistir asignaciones y zonas libres.
     _apply_zone_assignments(assignments, free_ids)
 
-    # Paso 5 — pool inicial de armies para cada jugador.
     for pid in order:
         usuarios_repo.update_user(pid, {"power_points": STARTING_POOL})
 
-    # Paso 6 — reset del estado de turno (Norte arranca, fase reinforce).
     game_state.reset()
 
     return {
@@ -433,3 +405,59 @@ def setup_game(
         "starts": order[0],
         "phase": "reinforce",
     }
+
+
+def ensure_game_setup() -> dict | None:
+    """Dispara el setup si detecta que la partida está 'cruda' (ninguna zona
+    tiene owner). Pensado para llamarse una vez al arrancar el backend en
+    local — en prod el scheduler tiene su propio trigger vía /turn/setup.
+    Devuelve el resultado del setup si lo ejecutó, `None` si ya estaba listo.
+    """
+    try:
+        zones = zonas_repo.list_zones()
+        if any(z.get("owner_clan_id") for z in zones):
+            return None
+        return _run_setup()
+    except Exception as e:
+        # El seed de zonas puede llegar milisegundos después si hay carrera
+        # entre el lifespan y la primera request; no queremos tumbar el API.
+        print(f"[SETUP] Auto-setup skipped: {e}")
+        return None
+
+
+@router.post("/setup", tags=["setup"])
+def setup_game(
+    x_scheduler_token: Optional[str] = Header(None, alias="X-Scheduler-Token"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Fase de preparación v3 (Clustered Risk).
+
+    Pasos:
+        1. Calcula el centroide (lat, lng) de cada zona desde su geojson.
+        2. Elige 4 semillas geográficamente SEPARADAS (una norte, sur,
+           este, oeste) — son los centros iniciales de cada jugador.
+        3. Para cada zona no-semilla, encuentra su semilla más cercana.
+           Asigna las ZONES_PER_PLAYER_TARGET (15) zonas más cercanas a
+           cada semilla. Las demás quedan LIBRES (owner_clan_id=None,
+           defense_level=0).
+        4. Coloca MIN_ARMIES_PER_ZONE armies en cada zona asignada.
+           Las libres se quedan a 0 armies (se reclaman con /actions/place).
+        5. Cada jugador recibe STARTING_POOL (30) armies como power_points
+           para desplegar donde quiera (reforzar o reclamar zonas libres).
+           15 zonas × 2 tropas + 30 pool = 60 armies iniciales por jugador.
+        6. Resetea el turno: Norte, fase reinforce, turno 1.
+
+    Resultado: ~60 zonas repartidas (15 por jugador, clusterizadas) +
+    ~26 zonas libres que cualquiera puede reclamar en su turno.
+
+    Seguridad: fuera de USE_LOCAL_STORE=1 el endpoint exige también
+    X-Scheduler-Token (Cloud Scheduler / ops) para evitar que cualquier
+    jugador autenticado resetee la partida en demo/producción.
+    """
+    if not USE_LOCAL and x_scheduler_token != settings.SCHEDULER_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden: scheduler token required")
+    try:
+        return _run_setup()
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))

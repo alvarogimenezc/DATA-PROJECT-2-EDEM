@@ -129,6 +129,7 @@ resource "google_dataflow_flex_template_job" "unified" {
     google_storage_bucket_iam_member.dataflow_bucket_admin,
     google_bigquery_table.player_scoring_events,
     google_bigquery_table.dead_letter,
+    null_resource.dataflow_flex_template,
   ]
 
   # Si alguien modifica parámetros de escalado fuera de Terraform, no

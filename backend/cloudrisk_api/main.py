@@ -28,13 +28,12 @@ from cloudrisk_api.endpoints import (
     turno as turn,
     usuarios as users,
     zonas as zones,
+    simulador as simulation,
 )
-from cloudrisk_api.services.gestor_websocket import ConnectionManager
+from cloudrisk_api.services.gestor_websocket import manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("cloudrisk_api")
-
-manager = ConnectionManager()
 
 base_path = "/api/v1"
 api_router = APIRouter(prefix=base_path)
@@ -73,14 +72,15 @@ app.add_middleware(
 app.include_router(prefix=api_router.prefix, router=users.router)
 app.include_router(prefix=api_router.prefix, router=clans.router)
 app.include_router(prefix=api_router.prefix, router=zones.router)
-app.include_router(prefix=api_router.prefix, router=battles.router)
 app.include_router(prefix=api_router.prefix, router=steps.router)
 app.include_router(prefix=api_router.prefix, router=armies.router)
 app.include_router(prefix=api_router.prefix, router=multipliers.router)
 app.include_router(prefix=api_router.prefix, router=turn.router)
 app.include_router(prefix=api_router.prefix, router=team_compat.router)
 app.include_router(prefix=api_router.prefix, router=missions.router)
+app.include_router(prefix=api_router.prefix, router=battles.router)
 app.include_router(prefix=api_router.prefix, router=analytics.router)
+app.include_router(prefix=api_router.prefix, router=simulation.router)
 
 
 def _seed_zones_firestore() -> None:
@@ -158,14 +158,31 @@ def _run_startup_seed() -> None:
     En modo local todo va a `almacen_en_memoria`. En Firestore real (o
     emulador), delegamos en los dos helpers de seed específicos para que
     cada uno se pueda fallar de forma independiente.
+
+    Después del seed, si la partida está 'cruda' (ninguna zona tiene owner)
+    disparamos `ensure_game_setup()` — así el frontend se abre ya con las
+    15×4 zonas repartidas y el pool de 30 armies por jugador, sin tener
+    que hacer click manual en ningún botón. En prod el scheduler sigue
+    siendo quien orquesta resets, pero para demo local es lo que menos
+    fricción tiene.
     """
     if os.environ.get("USE_LOCAL_STORE", "0") == "1":
         from cloudrisk_api.database.almacen_en_memoria import seed_zones, seed_demo_players
         seed_zones()
         seed_demo_players()
-        return
-    _seed_zones_firestore()
-    _seed_demo_players_firestore()
+    else:
+        _seed_zones_firestore()
+        _seed_demo_players_firestore()
+
+    try:
+        from cloudrisk_api.endpoints.turno import ensure_game_setup
+        result = ensure_game_setup()
+        if result:
+            per_player = result.get("setup", {}).get("zones_per_player", {})
+            free = result.get("setup", {}).get("free_zones_total", 0)
+            print(f"[SETUP] Auto-setup done — zones per player: {per_player}, free: {free}")
+    except Exception as e:
+        print(f"[SETUP] Auto-setup skipped: {e}")
 
 
 @app.websocket("/ws/{user_id}")

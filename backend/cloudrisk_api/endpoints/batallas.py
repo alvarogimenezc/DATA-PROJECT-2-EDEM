@@ -177,7 +177,6 @@ def resolve_battle(
 @router.post("/resolve-expired", include_in_schema=False)
 def resolve_expired_battles(x_scheduler_token: Optional[str] = Header(None, alias="X-Scheduler-Token")):
     """Auto-resolve all battles past their ends_at time. Called by Cloud Scheduler."""
-    from cloudrisk_api.configuracion import settings
     if x_scheduler_token != settings.SCHEDULER_SECRET:
         raise HTTPException(status_code=403, detail="Forbidden")
     now = datetime.now(timezone.utc)

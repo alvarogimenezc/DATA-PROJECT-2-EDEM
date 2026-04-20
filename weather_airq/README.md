@@ -1,104 +1,50 @@
-# weather_airq — ingestor de multiplicadores ambientales
+# ⛅ CloudRISK — Ingestores Ambientales (Clima y Calidad del Aire)
 
-Dos scripts de larga duración que calculan un multiplicador `0.6 – 1.5` y lo envían
-en streaming al sistema. El backend lo aplica después cuando los jugadores despliegan
-tropas (`armies_deployed = base * air_multiplier * weather_multiplier`).
+Esta carpeta contiene dos "reporteros" automáticos (`calidad_aire.py` y `clima.py`). Su misión es asomarse a la ventana cada 30 segundos para ver cómo está Valencia y avisar al juego de CloudRISK.
 
-Adaptado del [`alvarogimenezc/DATA-PROJECT-2-EDEM/weather_airq`](https://github.com/alvarogimenezc/DATA-PROJECT-2-EDEM/tree/main/weather_airq) del equipo.
+Dependiendo del tiempo y la contaminación, calculan un **Multiplicador de Ejércitos**.
+* Si hace un día estupendo y el aire es puro = **1.5** (¡Tus ejércitos crecen un 50%!).
+* Si hay tormenta y el aire es tóxico = **0.6** (¡Cuidado, pierdes casi la mitad de tus refuerzos!).
 
-## Qué hace cada script
+---
 
-| Archivo | Fuente de datos | Fórmula del multiplier | Campo `type` de salida |
-|---|---|---|---|
-| `calidad_aire.py` | OpenWeatherMap Air Pollution API (AQI 1-5) | `1.5 - (AQI - 1) * 0.225` | `"air_quality"` |
-| `clima.py` | OpenWeatherMap Current Weather API | base según estado del cielo, `-0.2` si la temperatura es extrema | `"weather"` |
+## 🛠️ Los dos reporteros
 
-Ambos acotan el valor final a `[0.6, 1.5]`, ambos publican cada
-`INGEST_INTERVAL_SECONDS` (por defecto 30 s).
+### 1. `calidad_aire.py`
+Mide el Índice de Calidad del Aire (AQI).
+* **Fórmula:** Penaliza progresivamente a medida que la contaminación sube del nivel 1 al 5.
+* **Mensaje:** Lo envía con la etiqueta `"type": "air_quality"`.
 
-## Modos
+### 2. `clima.py`
+Mide el estado del cielo (Sol, Lluvia, Nieve) y la Temperatura.
+* **Fórmula:** Da puntos base según el cielo (Despejado suma, Tormenta resta). Además, aplica una penalización extra de `-0.2` si hace calor extremo (>35ºC) o mucho frío (<5ºC) porque a las tropas les cuesta marchar.
+* **Mensaje:** Lo envía con la etiqueta `"type": "weather"`.
 
-| Variable env | Efecto |
-|---|---|
-| `OPENWEATHER_API_KEY` definida | **Modo real** — pega contra OpenWeatherMap |
-| `OPENWEATHER_API_KEY` sin definir | **Modo mock** — genera muestras sintéticas de AQI y clima (para que la demo corra end-to-end sin dependencia externa) |
+---
 
-## Sinks
+## 🧪 Cómo probarlos en el portátil 
 
-Los mismos scripts pueden entregar el multiplier a uno de tres sitios:
+Nuestros scripts son a prueba de fallos. Si los ejecutas tal cual, entrarán en **"Modo Simulacro" (MOCK)**: se inventarán datos de clima realistas y los imprimirán en tu pantalla, sin necesidad de conectarse a Google Cloud ni gastar en APIs de pago.
 
-| Variables env | A dónde va el mensaje |
-|---|---|
-| `PUBSUB_PROJECT` + `PUBSUB_TOPIC_AIR` / `PUBSUB_TOPIC_WEATHER` | Google Pub/Sub (real o emulador) |
-| `BACKEND_INGEST_URL` | HTTP `POST` al backend (p. ej. `http://localhost:8080/api/v1/multipliers/ingest`) |
-| ninguna | `stdout` (una línea JSON por ciclo) |
-
-## Ejecutar en local
+Abre tu terminal, entra en esta carpeta y ejecuta:
 
 ```bash
-cd weather_airq
+# 1. Instala las librerías necesarias
 pip install -r requirements.txt
 
-# Modo mock, volcado a stdout (cero configuración)
+# 2. Enciende el reportero de calidad del aire (pulsa Ctrl+C para apagarlo)
 python calidad_aire.py
+
+# 3. O enciende el reportero del clima (pulsa Ctrl+C para apagarlo)
 python clima.py
-
-# Modo real, empujando al backend en ejecución
-export OPENWEATHER_API_KEY=...                     # añádela a .env.local (gitignored)
-export BACKEND_INGEST_URL=http://localhost:8080/api/v1/multipliers/ingest
-python calidad_aire.py &
-python clima.py &
 ```
 
-## Ejecutar en Docker (dos imágenes desde un mismo Dockerfile)
-
-```bash
-docker build -t cloudrisk/air-ingestor     --target air     weather_airq/
-docker build -t cloudrisk/weather-ingestor --target weather weather_airq/
-
-# Cada uno corre en su propio contenedor; ambos comparten las convenciones de env vars de arriba.
-docker run -e BACKEND_INGEST_URL=http://host.docker.internal:8080/api/v1/multipliers/ingest cloudrisk/air-ingestor
-docker run -e BACKEND_INGEST_URL=http://host.docker.internal:8080/api/v1/multipliers/ingest cloudrisk/weather-ingestor
-```
-
-## Mensaje de ejemplo (aire)
-
-```json
-{
-  "type": "air_quality",
-  "ts": "2026-04-14T20:42:00+00:00",
-  "ciudad": "Valencia",
-  "aqi": 2,
-  "indice_multiplicador_aire": 1.275,
-  "components": {"co": 423.5, "no2": 18.4, "o3": 71.2, "pm2_5": 12.8, "pm10": 18.6},
-  "source": "openweathermap"
-}
-```
-
-## Mensaje de ejemplo (clima)
-
-```json
-{
-  "type": "weather",
-  "ts": "2026-04-14T20:42:00+00:00",
-  "ciudad": "Valencia",
-  "temp_c": 23.4,
-  "weather_main": "Clouds",
-  "weather_description": "scattered clouds",
-  "rain_mm_1h": 0,
-  "clouds_pct": 40,
-  "humidity_pct": 62,
-  "indice_multiplicador_tiempo": 1.2,
-  "source": "openweathermap"
-}
-```
-
-## Dónde acaban estos mensajes en el resto del stack
-
-```
-weather_airq → Pub/Sub → pipeline Dataflow → BigQuery (histórico)
-                       ↘
-                         CloudRISK API /api/v1/multipliers/ingest → caché en memoria
-                                                                 ↓
-                                            armies_deployed = base * mult
-```
+[calidad_aire.py] y [clima.py] 
+       ↓ 
+ Envían un JSON cada 30 segundos
+       ↓
+[Google Pub/Sub] (Nuestras antenas)
+       ↓
+[Apache Beam / Dataflow] (El código que transforma los datos)
+       ↓
+[BigQuery] (Donde se guarda el historial)

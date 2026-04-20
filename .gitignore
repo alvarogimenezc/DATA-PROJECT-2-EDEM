@@ -23,6 +23,7 @@ env/
 .claude/settings.local.json
 .claude/worktrees/
 .claude/plans/
+.claude/launch.json
 
 # ============ IDE / OS ============
 .vscode/

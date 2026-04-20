@@ -1,56 +1,9 @@
-"""
-CloudRISK — Unified Streaming Pipeline (Apache Beam / Dataflow)
-
-Fan-in de 3 topics Pub/Sub (player-movements, weather, air-quality) a un único
-pipeline con **stateful DoFn** por player_id. Aplica toda la lógica de negocio
-del juego en streaming:
-
-  1. Calcula distancia recorrida por usuario (haversine vs. última posición).
-  2. Calcula velocidad media en km/h. Si > MAX_SPEED_KMH → rechazo anti-trampa
-     (evento a DLQ, no se actualiza estado ni Firestore).
-  3. Cap de pasos diario: si el usuario ha reportado ya ≥ DAILY_STEPS_CAP
-     pasos hoy, trunca el exceso (no se acumula ni a ejércitos ni a steps).
-     Es una defensa anti-trampa adicional al speed check.
-  4. Factor multiplicador = último multiplicador ambiental (aire × clima)
-     propagado como side input desde los topics weather + air-quality.
-  5. Ejércitos equivalentes: (pasos permitidos // POWER_PER_STEPS) × factor.
-  6. Límite diario de armies: CombiningValueState acumula armies del día y
-     trunca al cap DAILY_ARMY_CAP. Un timer ProcessingTime resetea a diario
-     ambos contadores (armies y steps).
-
-Sinks:
-  - Firestore (UPSERT con Increment) — colecciones user_balance/ y users/.
-  - BigQuery (INSERT WRITE_APPEND) — tabla `cloudrisk.player_scoring_events`.
-  - BigQuery DLQ — tabla `cloudrisk.dead_letter` para mensajes rechazados.
-  - BigQuery ambiental — tabla `cloudrisk.environmental_factors` (histórico).
-
-Ejecución local (DirectRunner):
-
-    python pipelines/cloudrisk_unified.py \\
-        --runner=DirectRunner \\
-        --project=cloudrisk-local \\
-        --player_sub=projects/cloudrisk-local/subscriptions/player-movements-sub \\
-        --weather_sub=projects/cloudrisk-local/subscriptions/weather-sub \\
-        --airq_sub=projects/cloudrisk-local/subscriptions/air-quality-sub \\
-        --scoring_table=cloudrisk-local:cloudrisk.player_scoring_events \\
-        --env_table=cloudrisk-local:cloudrisk.environmental_factors \\
-        --dlq_table=cloudrisk-local:cloudrisk.dead_letter \\
-        --streaming
-
-Producción (DataflowRunner):
-
-    python pipelines/cloudrisk_unified.py \\
-        --runner=DataflowRunner \\
-        --project=<PROJECT_ID> \\
-        --region=europe-west1 \\
-        --temp_location=gs://<PROJECT_ID>-dataflow/tmp \\
-        --staging_location=gs://<PROJECT_ID>-dataflow/staging \\
-        --player_sub=... --weather_sub=... --airq_sub=... \\
-        --scoring_table=... --env_table=... --dlq_table=... \\
-        --streaming
-
-EDEM. Master Big Data & Cloud 2025/2026
-"""
+#ETL en Streaming (Extraer, Transformar y Cargar en tiempo real)
+# 1. Recibe los pasos de los jugadores, la contaminación y el clima en tiempo real.
+# 2. Calcula la velocidad del jugador para detectar trampas (si va en coche).
+# 3. Aplica límites de seguridad (máximo de pasos y ejércitos por día).
+# 4. Transforma los pasos en ejércitos usando la fórmula ambiental.
+# 5. Guarda los resultados en Firestore (para el juego en vivo) y BigQuery (historial).
 from __future__ import annotations
 
 import argparse
@@ -71,21 +24,23 @@ from apache_beam.transforms.userstate import (
 )
 from apache_beam.transforms.timeutil import TimeDomain
 
+#Bloques 1 y 2 -> definen las reglas del universo y preparan los "moldes" donde se guardará la información.
 
-# ─── Parámetros de juego (overridables por env var o flag CLI) ────────────────
-DEFAULT_POWER_PER_STEPS = int(os.environ.get("POWER_PER_STEPS", "500"))
-DEFAULT_DAILY_ARMY_CAP = int(os.environ.get("DAILY_ARMY_CAP", "50"))
-DEFAULT_MAX_SPEED_KMH = float(os.environ.get("MAX_SPEED_KMH", "15"))
-DEFAULT_DAILY_STEPS_CAP = int(os.environ.get("DAILY_STEPS_CAP", "30000"))
-# Multiplicador ambiental que asumimos cuando aún no ha llegado ningún
-# evento de aire/clima al side input — neutral, no penaliza ni premia.
-DEFAULT_ENV_MULTIPLIER = 1.0
-# Horas entre resets de los contadores diarios (armies_today, steps_today).
-# No es parametrizable por evento: es una constante operativa.
-DAILY_RESET_HOURS = 24.0
+#REGLAS DEL JUEGO. Se definen los límites y multiplicadores que se aplican al juego.  
+DEFAULT_POWER_PER_STEPS = int(os.environ.get("POWER_PER_STEPS", "500")) # 500 pasos = 1 ejército base
+DEFAULT_DAILY_ARMY_CAP = int(os.environ.get("DAILY_ARMY_CAP", "50")) # Máximo 50 ejércitos al día
+DEFAULT_MAX_SPEED_KMH = float(os.environ.get("MAX_SPEED_KMH", "15")) # Más de 15km/h = Trampa (va en bici/coche)
+DEFAULT_DAILY_STEPS_CAP = int(os.environ.get("DAILY_STEPS_CAP", "30000")) # Máximo 30.000 pasos al día
+
+DEFAULT_ENV_MULTIPLIER = 1.0 # Si fallan las APIs de clima, multiplicador neutro por defecto
+
+DAILY_RESET_HOURS = 24.0 # Cada 24 horas se resetean los límites a cero
 
 
-# ─── Schemas BigQuery ─────────────────────────────────────────────────────────
+#MOLDES PARA LA BASE DE DATOS (ESQUEMAS BQ)
+#Le decimos a BigQuery qué forma tienen las tablas para que no rechace los datos.
+
+#Cómo tienen que guardarse los puntos válidos de los jugadores (pasos, velocidad, ejércitos ganados)
 SCORING_SCHEMA = {
     "fields": [
         {"name": "player_id",          "type": "STRING",    "mode": "REQUIRED"},
@@ -103,7 +58,7 @@ SCORING_SCHEMA = {
         {"name": "processed_at",       "type": "TIMESTAMP", "mode": "REQUIRED"},
     ]
 }
-
+#Cómo tiene que guardarse el histórico del clima y el aire (temperatura, nivel de contaminación)
 ENV_SCHEMA = {
     "fields": [
         {"name": "ts",           "type": "TIMESTAMP", "mode": "REQUIRED"},
@@ -113,7 +68,8 @@ ENV_SCHEMA = {
         {"name": "processed_at", "type": "TIMESTAMP", "mode": "REQUIRED"},
     ]
 }
-
+# El contenedor de errores y trampas. Si alguien hace trampas o un archivo JSON viene roto, 
+# el dato se envía a este esquema con un campo "reason" que explica por qué fue rechazado.
 DLQ_SCHEMA = {
     "fields": [
         {"name": "source",       "type": "STRING",    "mode": "REQUIRED"},
@@ -125,9 +81,12 @@ DLQ_SCHEMA = {
 }
 
 
-# ─── Helpers puros (testables sin Beam) ───────────────────────────────────────
+# CALCULADORA. Helpers.Funciones para medir distancias en el mapa y arreglar fechas.
+# Funciones independientes que hacen cálculos rápidos o arreglan textos.
+# Al no depender de Google Dataflow, son muy fáciles de testear.
+
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Distancia en metros entre dos coordenadas WGS84."""
+# Fórmula  para calcular metros reales entre dos coordenadas GPS.
     r = 6_371_000.0  # radio Tierra en metros
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
@@ -136,17 +95,13 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
 
-
+#Devuelve la hora actual exacta en formato estándar internacional (UTC).
 def now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def parse_iso_ts(ts_str: str) -> datetime:
-    """Parsea un ISO-8601 con o sin sufijo Z. Si falla, devuelve `now()` en UTC.
-
-    Lo usamos en dos sitios (parse del evento y reset del timer) — centralizar
-    aquí evita el `try/except ValueError` repetido y deja claro el fallback.
-    """
+# Asegura que todas las horas del juego estén en formato estándar.
     try:
         return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
     except (ValueError, AttributeError, TypeError):
@@ -154,11 +109,7 @@ def parse_iso_ts(ts_str: str) -> datetime:
 
 
 def dlq_record(source: str, reason: str, player_id, raw_payload: str) -> dict:
-    """Construye una fila para la tabla `dead_letter` en BQ.
-
-    Llamado desde 5 sitios (los 3 DoFns de parse + scoring), por eso vive
-    suelto a nivel módulo en vez de duplicar la misma estructura inline.
-    """
+# Crea la etiqueta para mandar un evento corrupto a la tabla de errores (DLQ).
     return {
         "source": source,
         "reason": reason,
@@ -168,15 +119,19 @@ def dlq_record(source: str, reason: str, player_id, raw_payload: str) -> dict:
     }
 
 
-# ─── Parse DoFns ──────────────────────────────────────────────────────────────
-class ParseMovement(beam.DoFn):
-    """Decodifica un mensaje player-movements. TaggedOutput 'dlq' si falla."""
-    DLQ = "dlq"
+# ─── Clases Parse DoFns ───TRADUCTOR DE MENSAJES
+#Cogen el texto crudo de Pub/Sub y lo convierten en diccionarios Python.
 
+
+class ParseMovement(beam.DoFn):
+#Traduce los pasos. Si no tiene 'player_id', lo tira a la basura (DLQ).
+    DLQ = "dlq"
+    #Intenta leer el JSON.
     def process(self, raw: bytes):
         try:
             msg = json.loads(raw.decode("utf-8"))
         except Exception as exc:
+        ##Si el texto es ilegible, crea un recibo de error y tíralo a la DLQ
             yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
                 source="player-movements",
                 reason=f"json_decode: {exc}",
@@ -184,7 +139,7 @@ class ParseMovement(beam.DoFn):
                 raw_payload=raw[:500].decode("utf-8", errors="replace"),
             ))
             return
-
+        #Comprueba que tiene el player_id. Si no, crea un recibo de error y tíralo a la DLQ
         pid = msg.get("player_id")
         if not pid:
             yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
@@ -194,7 +149,7 @@ class ParseMovement(beam.DoFn):
                 raw_payload=json.dumps(msg),
             ))
             return
-
+        #Si todo va bien, devuelve un diccionario con los campos necesarios para el scoring y el raw original por si acaso.
         yield (pid, {
             "player_id": pid,
             "ts": msg.get("timestamp") or msg.get("ts") or now_utc_iso(),
@@ -206,7 +161,7 @@ class ParseMovement(beam.DoFn):
 
 
 class ParseEnvironment(beam.DoFn):
-    """Decodifica air_quality / weather a una fila unificada y el multiplicador."""
+# Traduce los datos del clima y del aire. Extrae los multiplicadores matemáticos
     DLQ = "dlq"
 
     def process(self, raw: bytes):
@@ -220,7 +175,8 @@ class ParseEnvironment(beam.DoFn):
                 raw_payload=raw[:500].decode("utf-8", errors="replace"),
             ))
             return
-
+        # El mensaje debe tener un campo "type" que indique si es clima o calidad del aire 
+        # para buscar su multiplicador correspondiente. Si no, a la DLQ con un recibo de error.
         mtype = msg.get("type")
         if mtype == "air_quality":
             mult = msg.get("indice_multiplicador_aire")
@@ -244,7 +200,7 @@ class ParseEnvironment(beam.DoFn):
             ))
             return
 
-        # Para BQ environmental_factors
+        # Para BQ environmental_factors. Prepara la fila perfecta para guardarla en el historial de BigQuery.
         yield {
             "ts":           msg.get("ts") or now_utc_iso(),
             "type":         mtype,
@@ -255,25 +211,27 @@ class ParseEnvironment(beam.DoFn):
 
 
 class ExtractMultiplier(beam.DoFn):
-    """De una fila environmental ya parseada extrae (kind, multiplier) para combinar."""
+# Solo extrae el tipo y el número del multiplicador
+    # para usarlo más adelante en las matemáticas de los ejércitos.
     def process(self, row):
         yield (row["type"], float(row["multiplier"]))
 
 
-# ─── Side input: último multiplicador ambiental agregado ──────────────────────
+# FUSIÓN DE FACTORES AMBIENTALES. Calcula el multiplicador final multiplicando Aire x Clima.
 class LatestMultiplierCombineFn(beam.CombineFn):
-    """Conserva el último multiplicador recibido por tipo (air_quality / weather)
-    y lo combina en un único factor (aire × clima). Se expone como AsSingleton.
-    """
+# Coge el último dato de clima y aire que ha llegado y los multiplica.
+
+    #1.Empieza asumiendo que el clima y el aire son normales (multiplicador 1.0) hasta que lleguen datos reales.
     def create_accumulator(self):
         return {"air_quality": 1.0, "weather": 1.0}
-
+    #2.ACTUALIZAR MEMORIA: Cuando llega un dato nuevo, sobrescribe solo ese tipo.
     def add_input(self, acc, inp):
         kind, mult = inp
         if kind in acc:
             acc[kind] = mult
         return acc
-
+    # 3. SINCRONIZAR SERVIDORES: Si Dataflow está usando varios ordenadores a la vez,
+        # junta las memorias de todos en un solo diccionario maestro.
     def merge_accumulators(self, accs):
         out = {"air_quality": 1.0, "weather": 1.0}
         for a in accs:
@@ -281,12 +239,16 @@ class LatestMultiplierCombineFn(beam.CombineFn):
                 if k in out:
                     out[k] = v
         return out
-
+    #4.EL RESULTADO: Multiplica el último aire conocido por el último clima conocido.
     def extract_output(self, acc):
         return float(acc.get("air_quality", 1.0)) * float(acc.get("weather", 1.0))
 
 
-# ─── El corazón: StatefulScoringDoFn ──────────────────────────────────────────
+# ─── Es el único sitio que tiene "memoria" por cada jugador de forma individual.
+# Esto (Stateful Processing) permite saber a qué velocidad va un usuario 
+# comparando su ubicación actual con la anterior que teníamos guardada.
+
+# 1. Creamos los "Casilleros de Memoria" individuales para cada jugador
 LAST_POS_STATE = ReadModifyWriteStateSpec("last_pos", beam.coders.PickleCoder())
 ARMIES_TODAY_STATE = CombiningValueStateSpec("armies_today", beam.coders.VarIntCoder(), sum)
 STEPS_TODAY_STATE = CombiningValueStateSpec("steps_today", beam.coders.VarIntCoder(), sum)
@@ -294,12 +256,9 @@ DAILY_RESET_TIMER = TimerSpec("daily_reset", TimeDomain.REAL_TIME)
 
 
 class StatefulScoringDoFn(beam.DoFn):
-    """Scoring estado-por-jugador. Consume (player_id, movement_dict) y emite
-    (scoring_event_for_bq, firestore_delta) por el cauce principal, y dead-
-    letter por el tag DLQ.
-    """
+# Recibe los pasos de un jugador, revisa trampas, calcula puntos y guarda progreso.
     DLQ = "dlq"
-
+    # Cargamos las reglas del juego al arrancar el Juez
     def __init__(
         self,
         max_speed_kmh: float = DEFAULT_MAX_SPEED_KMH,
@@ -315,12 +274,7 @@ class StatefulScoringDoFn(beam.DoFn):
     # ─── Helpers internos (puros, sin tocar estado Beam) ──────────────────────
     @staticmethod
     def _calculate_speed_kmh(prev, lat, lon, ev_ts):
-        """Devuelve `(distance_m, speed_kmh)` vs. la última posición.
-
-        Si no había posición previa o falta alguna coordenada, devuelve `(0, 0)`
-        (no hay cómo calcular velocidad). `dt_s` se acota a 1µs para evitar
-        división por cero si dos eventos llegan con el mismo timestamp.
-        """
+    # Compara dónde estaba el jugador antes y ahora para sacar la velocidad.
         sin_posicion_previa = (
             not prev
             or lat is None or lon is None
@@ -334,12 +288,7 @@ class StatefulScoringDoFn(beam.DoFn):
         return distance_m, speed_kmh
 
     def _compute_armies(self, allowed_steps, env_factor, today_so_far):
-        """Aplica el cap diario de armies y devuelve `(armies_earned, capped)`.
-
-        `armies_earned` nunca supera `daily_cap - today_so_far`; el resto se
-        descarta. `capped=True` significa que se truncó por este cap (no por
-        el de pasos — esos son flags separados).
-        """
+    # Convierte pasos en ejércitos asegurándose de no pasar del límite de 50 diarios.
         raw_armies = int((allowed_steps // self.power_per_steps) * env_factor)
         remaining = max(0, self.daily_cap - today_so_far)
         return min(raw_armies, remaining), raw_armies > remaining
@@ -359,13 +308,11 @@ class StatefulScoringDoFn(beam.DoFn):
         lat, lon = evt.get("latitude"), evt.get("longitude")
         steps = int(evt.get("steps_delta", 0))
 
-        # 1) Calcula velocidad vs. la última posición conocida.
+        # PASO 1) Mirar la memoria y calcular la velocidad.
         prev = last_pos.read()
         distance_m, speed_kmh = self._calculate_speed_kmh(prev, lat, lon, ev_ts)
 
-        # 2) Anti-trampa: rechazar si la velocidad supera el límite.
-        # Importante: `return` aquí salta TODOS los writes a estado, así el
-        # evento tramposo no contamina los contadores diarios ni la posición.
+        # PASO 2) JUEZ ANTI-TRAMPA: Si va muy rápido, descartamos el evento entero.
         if speed_kmh > self.max_speed_kmh:
             yield beam.pvalue.TaggedOutput(self.DLQ, dlq_record(
                 source="player-movements",
@@ -375,40 +322,33 @@ class StatefulScoringDoFn(beam.DoFn):
             ))
             return
 
-        # 3) Cap de pasos diario — el exceso se descarta. No entra ni en
-        # armies ni en total_steps. Es la segunda barrera anti-trampa
-        # (complementa al speed check).
+        # 3) Límite de 30.000 pasos. Si los supera, corta el grifo.
         pasos_hoy = int(steps_today.read() or 0)
         pasos_restantes_cap = max(0, self.daily_steps_cap - pasos_hoy)
         pasos_permitidos = min(steps, pasos_restantes_cap)
         steps_capped = pasos_permitidos < steps
 
-        # 4) Calcula armies con el multiplicador ambiental + cap diario.
+        # 4) Calcula los ejércitos ganados con la ayuda del clima.
         env_factor = float(env_mult) if env_mult is not None else DEFAULT_ENV_MULTIPLIER
         today_so_far = int(armies_today.read() or 0)
         armies_earned, armies_capped = self._compute_armies(
             pasos_permitidos, env_factor, today_so_far,
         )
-        # `capped` en BQ señaliza que *algo* se truncó — cap de armies o de pasos.
+      
         capped = armies_capped or steps_capped
 
-        # 5) Actualiza estado sólo si el evento es válido (pasa anti-trampa).
+        # 5) Actualiza la memoria interna del jugador para el próximo evento.
         last_pos.write({"lat": lat, "lon": lon, "ts": ev_ts})
         if pasos_permitidos > 0:
             steps_today.add(pasos_permitidos)
         if armies_earned > 0:
             armies_today.add(armies_earned)
 
-        # 6) Programa reset diario. El timer es idempotente por nombre, así que
-        # cada llamada a `set()` SOBREESCRIBE el anterior — el cooldown de 24 h
-        # se reinicia en cada evento, no se acumula. Si no llegan eventos, el
-        # último timer programado dispara igualmente y limpia los contadores.
+        # 6) Configura la alarma para reiniciar los límites a 0 dentro de 24h.
         next_reset = (ev_ts + timedelta(hours=DAILY_RESET_HOURS)).timestamp()
         daily_timer.set(next_reset)
 
-        # 7) Evento enriquecido — una copia para BQ, otra para Firestore.
-        # `steps_delta` ahora es el valor **permitido** (post-cap), para que
-        # Firestore y BQ cuadren con "qué computó realmente el jugador".
+        # 7) Genera el recibo final para enviar a la base de datos.
         yield {
             "player_id": player_id,
             "ts": evt["ts"],
@@ -418,8 +358,6 @@ class StatefulScoringDoFn(beam.DoFn):
             "distance_m": round(distance_m, 2),
             "speed_kmh": round(speed_kmh, 3),
             "env_multiplier": round(env_factor, 3),
-            # `rappel_applied` se retiró del scoring (v3.2). Conservamos la
-            # columna en BQ para no romper el schema existente, siempre False.
             "rappel_applied": False,
             "armies_earned": armies_earned,
             "armies_today_after": today_so_far + armies_earned,
@@ -428,27 +366,33 @@ class StatefulScoringDoFn(beam.DoFn):
         }
 
     @on_timer(DAILY_RESET_TIMER)
+    # Suena la alarma de 24h: borramos el progreso diario del jugador para que vuelva a 0.
     def _on_daily_reset(
         self,
         armies_today=beam.DoFn.StateParam(ARMIES_TODAY_STATE),
         steps_today=beam.DoFn.StateParam(STEPS_TODAY_STATE),
     ):
-        # Reset de los contadores diarios. No emitimos ningún evento al hacerlo
-        # (el siguiente evento real ya refleja el reset).
+
         armies_today.clear()
         steps_today.clear()
 
 
-# ─── Firestore sink ───────────────────────────────────────────────────────────
+
+# BLOQUE 7: ACTUALIZACIÓN DEL JUEGO EN VIVO (FIRESTORE SINK)
+# Coge los puntos válidos calculados por el Juez y los sube a Firestore.
+# Esto hace que la pantalla del móvil del jugador se actualice por arte de magia.
 class WriteFirestoreDoFn(beam.DoFn):
-    """UPSERT con Increment a user_balance/ y users/. Ignora filas con 0
-    armies_earned para no tocar Firestore sin motivo."""
+    ## Suma los ejércitos nuevos a los que ya tenía el jugador en el móvil.UPSERT con Increment a user_balance/ y users/. 
+    # Ignora filas con 0 armies_earned para no tocar Firestore sin motivo.
     def setup(self):
+        #Nos conectamos a la base de datos de Firestore al arrancar
         from google.cloud import firestore  # noqa: F401
         self.fs_module = firestore
         self.db = firestore.Client()
 
     def process(self, row):
+        # Si por culpa del clima o los límites diarios ha ganado 0 ejércitos,
+        # no hacemos nada para ahorrar dinero en lecturas/escrituras de la nube.
         if int(row.get("armies_earned", 0)) <= 0:
             yield row
             return
@@ -458,14 +402,15 @@ class WriteFirestoreDoFn(beam.DoFn):
         steps = int(row.get("steps_delta", 0))
         armies = int(row["armies_earned"])
 
-        # Contrato del equipo
+        # 1. Actualizamos el saldo de ejércitos para poder atacar en el mapa
+        # Usamos 'Increment' para sumar de forma segura sin borrar otras transacciones
         self.db.collection("user_balance").document(pid).set({
             "armies":      firestore.Increment(armies),
             "total_steps": firestore.Increment(steps),
             "last_scored_at": firestore.SERVER_TIMESTAMP,
         }, merge=True)
 
-        # Contrato del backend CloudRISK — lo lee el frontend
+        # 2. Actualizamos el perfil público del jugador (Nivel, Puntos de Poder, Oro)
         self.db.collection("users").document(pid).set({
             "steps_total":  firestore.Increment(steps),
             "power_points": firestore.Increment(int(steps * float(row.get("env_multiplier", 1.0)))),
@@ -476,8 +421,11 @@ class WriteFirestoreDoFn(beam.DoFn):
         yield row
 
 
-# ─── Pipeline ─────────────────────────────────────────────────────────────────
+# BLOQUE 8: LA CONSTRUCCIÓN DE LAS TUBERÍAS (PIPELINE)
+# Aquí no hay matemáticas. Solo cogemos todas las piezas (DoFns) que 
+# hemos programado arriba y las conectamos con flechas ( | >> ).
 def build_pipeline(opts):
+    # Configuramos el motor de Google Dataflow
     pipeline_options = PipelineOptions(
         runner=opts.runner,
         project=opts.project,
@@ -490,11 +438,14 @@ def build_pipeline(opts):
     pipeline_options.view_as(StandardOptions).streaming = True
 
     with beam.Pipeline(options=pipeline_options) as p:
-        # ── Rama ambiental (fan-in de 2 subs + parse + sink + side input) ─
+        #----------------------------------------------------------------
+        # Tubería 1: Leer Clima y Aire, fusionarlos y mandarlos a BigQuery
+        #----------------------------------------------------------------
+        # 1. Escuchamos las dos antenas a la vez
         air_raw = p | "ReadAir" >> beam.io.ReadFromPubSub(subscription=opts.airq_sub)
         weather_raw = p | "ReadWeather" >> beam.io.ReadFromPubSub(subscription=opts.weather_sub)
         env_raw = (air_raw, weather_raw) | "MergeEnv" >> beam.Flatten()
-
+        # 2. Traducimos los mensajes cada 60 segundos
         env_parsed = (
             env_raw
             | "WindowEnv60s" >> beam.WindowInto(window.FixedWindows(60))
@@ -504,17 +455,21 @@ def build_pipeline(opts):
         )
         env_rows = env_parsed.rows
         env_dlq = env_parsed[ParseEnvironment.DLQ]
+        # 3. Mandamos una copia del clima al Historial de BigQuery
+        if getattr(opts, 'local', False):
+            env_rows | "LogEnvLocal" >> beam.Map(
+                lambda r: logging.info("[ENV] type=%s mult=%.3f", r.get("type"), r.get("multiplier", 0))
+            )
+        else:
+            env_rows | "WriteEnvBQ" >> beam.io.WriteToBigQuery(
+                opts.env_table,
+                schema=ENV_SCHEMA,
+                create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
+            )
 
-        env_rows | "WriteEnvBQ" >> beam.io.WriteToBigQuery(
-            opts.env_table,
-            schema=ENV_SCHEMA,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-            method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
-        )
-
-        # Side input: un único float con el producto aire×clima más reciente,
-        # actualizado en ventanas globales con triggers repetidos cada 30s.
+        # 4. Extraemos el multiplicador y lo dejamos en memoria para que el Juez lo use
         env_side = (
             env_rows
             | "ExtractMult" >> beam.ParDo(ExtractMultiplier())
@@ -525,8 +480,10 @@ def build_pipeline(opts):
             )
             | "CombineLatestMult" >> beam.CombineGlobally(LatestMultiplierCombineFn()).without_defaults()
         )
-
-        # ── Rama jugadores ─────────────────────────────────────────────────
+        #----------------------------------------------------------------
+        # Tubería 2: Leer Jugadores, pasar por el Juez y guardar puntos
+        #----------------------------------------------------------------
+        # 1. Leemos y traducimos los pasos de Pub/Sub
         player_parsed = (
             p
             | "ReadPlayer" >> beam.io.ReadFromPubSub(subscription=opts.player_sub)
@@ -536,7 +493,7 @@ def build_pipeline(opts):
         )
         player_rows = player_parsed.rows
         player_dlq = player_parsed[ParseMovement.DLQ]
-
+         # 2. Pasamos los pasos por el Cerebro Central (El Juez)
         scored = (
             player_rows
             | "ScoringStateful" >> beam.ParDo(
@@ -552,32 +509,51 @@ def build_pipeline(opts):
         scoring_rows = scored.rows
         scoring_dlq = scored[StatefulScoringDoFn.DLQ]
 
-        # Sink 1: Firestore UPSERT
+        # 3. Firestore UPSERT. Guardar puntos en Firestore (Juego en Vivo)
         firestore_written = scoring_rows | "WriteFirestore" >> beam.ParDo(WriteFirestoreDoFn())
 
-        # Sink 2: BigQuery scoring histórico
-        firestore_written | "WriteScoringBQ" >> beam.io.WriteToBigQuery(
-            opts.scoring_table,
-            schema=SCORING_SCHEMA,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-            method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
-        )
+        # 4. Guardar puntos en BigQuery (Historial Analítico)
+        if getattr(opts, 'local', False):
+            firestore_written | "LogScoringLocal" >> beam.Map(
+                lambda r: logging.info("[SCORING] player=%s steps=%s armies=%s",
+                                       r.get("player_id"), r.get("steps_delta"), r.get("armies_earned"))
+            )
+        else:
+            firestore_written | "WriteScoringBQ" >> beam.io.WriteToBigQuery(
+                opts.scoring_table,
+                schema=SCORING_SCHEMA,
+                create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
+            )
 
-        # ── Rama DLQ (todos los orígenes → una sola tabla) ─────────────────
+        #----------------------------------------------------------------
+        # Tubería 3: Recoger la basura (DLQ) (todos los orígenes → una sola tabla) ─────────────────
+        #----------------------------------------------------------------
+
+        #Juntamos los errores de clima, de traducción de pasos y de tramposos en un solo tubo
         all_dlq = (env_dlq, player_dlq, scoring_dlq) | "MergeDLQ" >> beam.Flatten()
-        all_dlq | "WriteDLQ" >> beam.io.WriteToBigQuery(
-            opts.dlq_table,
-            schema=DLQ_SCHEMA,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-            method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
-        )
-        all_dlq | "LogDLQ" >> beam.Map(
-            lambda r: logging.warning("[DLQ] %s: %s", r.get("source"), r.get("reason"))
-        )
+        if getattr(opts, 'local', False):
+            all_dlq | "LogDLQLocal" >> beam.Map(
+                lambda r: logging.warning("[DLQ] %s: %s — %s", r.get("source"), r.get("reason"), r.get("player_id"))
+            )
+        else:
+        ##Lo mandamos todo a la tabla del Basurero en BigQuery
+            all_dlq | "WriteDLQ" >> beam.io.WriteToBigQuery(
+                opts.dlq_table,
+                schema=DLQ_SCHEMA,
+                create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
+                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
+                method=beam.io.WriteToBigQuery.Method.STREAMING_INSERTS,
+            )
+            all_dlq | "LogDLQ" >> beam.Map(
+                lambda r: logging.warning("[DLQ] %s: %s", r.get("source"), r.get("reason"))
+            )
 
-
+# ====================================================================
+# BOTÓN DE ARRANQUE (MAIN)
+# Recoge la configuración que escribes en la terminal y enciende el motor.
+# ====================================================================
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -593,21 +569,24 @@ def main():
     parser.add_argument("--weather_sub", required=True)
     parser.add_argument("--airq_sub", required=True)
 
-    parser.add_argument("--scoring_table", required=True,
+    parser.add_argument("--scoring_table", default="unused",
                         help="BQ table project:dataset.player_scoring_events")
-    parser.add_argument("--env_table", required=True,
+    parser.add_argument("--env_table", default="unused",
                         help="BQ table project:dataset.environmental_factors")
-    parser.add_argument("--dlq_table", required=True,
+    parser.add_argument("--dlq_table", default="unused",
                         help="BQ table project:dataset.dead_letter")
 
     parser.add_argument("--max_speed_kmh", type=float, default=DEFAULT_MAX_SPEED_KMH)
     parser.add_argument("--power_per_steps", type=int, default=DEFAULT_POWER_PER_STEPS)
     parser.add_argument("--daily_army_cap", type=int, default=DEFAULT_DAILY_ARMY_CAP)
     parser.add_argument("--daily_steps_cap", type=int, default=DEFAULT_DAILY_STEPS_CAP)
+    parser.add_argument("--local", action="store_true",
+                        help="Skip BigQuery sinks (no BQ emulator). Logs output instead.")
 
     args, _ = parser.parse_known_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     build_pipeline(args)
+    # ¡Enciende las tuberías!
 
 
 if __name__ == "__main__":

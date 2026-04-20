@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 
@@ -12,8 +10,6 @@ from cloudrisk_api.database import usuarios as usuarios_repo
 from cloudrisk_api.services.autenticacion import create_access_token, get_current_user
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-POWER_DECAY_RATE = 0.85  # decaimiento diario del 15% — mantiene el juego dinámico
 
 
 class UserCreate(BaseModel):

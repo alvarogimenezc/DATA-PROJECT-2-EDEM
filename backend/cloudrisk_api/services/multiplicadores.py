@@ -9,7 +9,6 @@ a plain RLock is enough.
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -66,10 +65,3 @@ def update_from_message(message: dict) -> Snapshot:
                 weather_payload=message,
             )
         return _state
-
-
-def reset() -> None:
-    """Test helper — wipe the cache."""
-    global _state
-    with _lock:
-        _state = Snapshot()
