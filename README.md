@@ -49,7 +49,24 @@ Por último, el frontend se conecta a las tablas mediante un servidor de FastAPI
 
 ## 3. Reglas del juego
 
-Explicar las reglas del juego, lógica que aplica dataflow de los multiplicadores etc. 
+**CloudRISK** traslada la mecánica de conquista de territorios a la vida real. La economía del juego no avanza por el paso del tiempo, sino por la actividad física del usuario.
+
+**1. Generación de Tropas y Multiplicadores:**
+La conversión base del juego es de **500 pasos = 1 Ejército**. Sin embargo, este valor es dinámico y depende de las condiciones ambientales de Valencia en el momento exacto en que se camina:
+* **Clima:** Días despejados otorgan bonificadores positivos, mientras que la lluvia, el viento o temperaturas extremas aplican penalizaciones.
+* **Calidad del Aire (AQI):** Respirar aire limpio bonifica la generación de tropas, mientras que los niveles altos de contaminación la reducen severamente.
+* *Fórmula de Dataflow:* `Ejércitos = (Pasos / 500) * Factor Clima * Factor Aire`
+
+**2. Sistema Anti-Trampas (Dataflow Juez):**
+Para evitar que los usuarios generen tropas yendo en coche o usando bots, el pipeline de Dataflow vigila cada movimiento con tres reglas estrictas:
+* **Radar de velocidad:** Si la distancia entre dos puntos GPS refleja una velocidad superior a **15 km/h**, el evento se marca como trampa y se descarta automáticamente.
+* **Límite de Pasos Diarios:** Solo se contabilizan un máximo de **30.000 pasos al día** por jugador (equivalente a casi una maratón).
+* **Límite de Tropas:** Ningún jugador puede generar más de **50 ejércitos** en un periodo de 24 horas.
+
+**3. Conquista y Tablero:**
+* **Adyacencia:** Los jugadores solo pueden atacar o fortificar los barrios de Valencia que compartan frontera directa con sus territorios actuales.
+* **Coste de Acción:** Atacar un barrio enemigo o mover tropas consume *Power Points* (Pool). Si el jugador se queda sin puntos, debe volver a salir a caminar para recargar su capacidad de acción.
+* **Desgaste:** Atacar reduce temporalmente el nivel de defensa de la zona desde la que se lanza el ataque.
 
 ---
 
