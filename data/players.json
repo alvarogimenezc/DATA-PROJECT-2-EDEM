@@ -7,7 +7,7 @@
       "email": "norte@cloudrisk.app",
       "password": "demo1234",
       "clan_color": "#ff2d92",
-      "spawn_zone": "zona-borbot",
+      "spawn_zone": "zona-borboto",
       "starting_armies": 10,
       "starting_gold": 500
     },
@@ -27,7 +27,7 @@
       "email": "este@cloudrisk.app",
       "password": "demo1234",
       "clan_color": "#00f0ff",
-      "spawn_zone": "zona-malva-rosa",
+      "spawn_zone": "zona-la-malvarosa",
       "starting_armies": 10,
       "starting_gold": 500
     },
@@ -37,7 +37,7 @@
       "email": "oeste@cloudrisk.app",
       "password": "demo1234",
       "clan_color": "#a855f7",
-      "spawn_zone": "zona-benim\u00e0met",
+      "spawn_zone": "zona-benimaclet\u00e0met",
       "starting_armies": 10,
       "starting_gold": 500
     }

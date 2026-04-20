@@ -79,68 +79,128 @@ app.include_router(prefix=api_router.prefix, router=multipliers.router)
 app.include_router(prefix=api_router.prefix, router=turn.router)
 app.include_router(prefix=api_router.prefix, router=team_compat.router)
 app.include_router(prefix=api_router.prefix, router=missions.router)
+app.include_router(prefix=api_router.prefix, router=analytics.router)
+app.include_router(prefix=api_router.prefix, router=simulation.router)
+
+
+def _seed_zones_firestore() -> None:
+    """Siembra `VALENCIA_ZONES` en Firestore.
+
+    Sólo se ejecuta cuando NO estamos en modo local (`USE_LOCAL_STORE != 1`).
+    Si Firestore no responde (sin credenciales en dev), logueamos y seguimos
+    — no es razón para tumbar el arranque del API.
+
+    Comportamiento:
+      - Por defecto, es idempotente: si ya hay zonas en Firestore, no toca.
+      - Con `FORCE_RESEED_ZONES=1` (env var), borra la colección y reinserta.
+        Útil cuando cambia el esquema/IDs de las seeds y no quieres resetear
+        el emulador entero.
+    """
+    try:
+        from cloudrisk_api.database.almacen_en_memoria import VALENCIA_ZONES
+        from cloudrisk_api.database import zonas as zonas_repo
+        existing = zonas_repo.list_zones()
+        force = os.environ.get("FORCE_RESEED_ZONES", "0") == "1"
+        if existing and not force:
+            print(f"[FIRESTORE] Zones already seeded ({len(existing)} found).")
+            return
+        from google.cloud import firestore
+        db = firestore.Client(project=os.environ.get("PROJECT_ID", "cloudrisk-local"))
+        col = os.environ.get("FIRESTORE_COLLECTION_ZONES", "zones")
+        if existing and force:
+            # Wipe old collection antes de reinsertar. Batch en chunks de 400
+            # para no pasarse del límite de Firestore (500 ops por batch).
+            print(f"[FIRESTORE] FORCE_RESEED_ZONES=1 — wiping {len(existing)} old zones...")
+            col_ref = db.collection(col)
+            docs = list(col_ref.stream())
+            for i in range(0, len(docs), 400):
+                batch = db.batch()
+                for d in docs[i:i+400]:
+                    batch.delete(d.reference)
+                batch.commit()
+        for zone in VALENCIA_ZONES:
+            db.collection(col).document(zone["id"]).set(zone)
+        print(f"[FIRESTORE] Seeded {len(VALENCIA_ZONES)} Valencia zones.")
+    except Exception as e:
+        print(f"[FIRESTORE] Zone seeding skipped: {e}")
+
+
+def _seed_demo_players_firestore() -> None:
+    """Siembra los 4 jugadores demo con IDs fijos en Firestore.
+
+    Los IDs (`demo-player-001..004`) tienen que coincidir con el orden de
+    turnos de `game_state.DEFAULT_PLAYER_ORDER`, por eso no se generan al
+    vuelo. La password está hasheada con bcrypt para que el login funcione.
+    """
+    try:
+        from datetime import datetime
+        from passlib.context import CryptContext
+        from google.cloud import firestore
+        from cloudrisk_api.configuracion import settings
+
+        DEMO_PLAYERS = [
+            {"id": "demo-player-001", "name": "Comandante Norte", "email": "norte@cloudrisk.app", "password": "demo1234", "gold": 500},
+            {"id": "demo-player-002", "name": "Comandante Sur",   "email": "sur@cloudrisk.app",   "password": "demo1234", "gold": 500},
+            {"id": "demo-player-003", "name": "Comandante Este",  "email": "este@cloudrisk.app",  "password": "demo1234", "gold": 500},
+            {"id": "demo-player-004", "name": "Comandante Oeste", "email": "oeste@cloudrisk.app", "password": "demo1234", "gold": 500},
+        ]
+        pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+        db = firestore.Client(project=os.environ.get("PROJECT_ID", "cloudrisk-local"))
+        col = settings.FIRESTORE_COLLECTION_USERS
+        created = 0
+        for p in DEMO_PLAYERS:
+            doc_ref = db.collection(col).document(p["id"])
+            if doc_ref.get().exists:
+                continue
+            doc_ref.set({
+                "id": p["id"],
+                "name": p["name"],
+                "email": p["email"],
+                "hashed_password": pwd_ctx.hash(p["password"]),
+                "clan_id": None,
+                "steps_total": 0,
+                "power_points": 0,
+                "gold": p["gold"],
+                "level": 1,
+                "created_at": datetime.utcnow().isoformat(),
+            })
+            created += 1
+        print(f"[FIRESTORE] Seeded {created} demo players.")
+    except Exception as e:
+        print(f"[FIRESTORE] Player seeding skipped: {e}")
 
 
 def _run_startup_seed() -> None:
-    """Siembra las zonas de Valencia al arrancar (store local o emulador Firestore)."""
+    """Siembra las zonas de Valencia y los 4 jugadores demo al arrancar.
+
+    En modo local todo va a `almacen_en_memoria`. En Firestore real (o
+    emulador), delegamos en los dos helpers de seed específicos para que
+    cada uno se pueda fallar de forma independiente.
+
+    Después del seed, si la partida está 'cruda' (ninguna zona tiene owner)
+    disparamos `ensure_game_setup()` — así el frontend se abre ya con las
+    15×4 zonas repartidas y el pool de 30 armies por jugador, sin tener
+    que hacer click manual en ningún botón. En prod el scheduler sigue
+    siendo quien orquesta resets, pero para demo local es lo que menos
+    fricción tiene.
+    """
     if os.environ.get("USE_LOCAL_STORE", "0") == "1":
         from cloudrisk_api.database.almacen_en_memoria import seed_zones, seed_demo_players
         seed_zones()
         seed_demo_players()
     else:
-        # Siembra zonas en el emulador Firestore si la colección está vacía
-        try:
-            from cloudrisk_api.database.almacen_en_memoria import VALENCIA_ZONES
-            from cloudrisk_api.database import zonas as zonas_repo
-            existing = zonas_repo.list_zones()
-            if not existing:
-                from google.cloud import firestore
-                db = firestore.Client(project=os.environ.get("PROJECT_ID", "cloudrisk-local"))
-                col = os.environ.get("FIRESTORE_COLLECTION_ZONES", "zones")
-                for zone in VALENCIA_ZONES:
-                    db.collection(col).document(zone["id"]).set(zone)
-                print(f"[FIRESTORE] Seeded {len(VALENCIA_ZONES)} Valencia zones.")
-            else:
-                print(f"[FIRESTORE] Zones already seeded ({len(existing)} found).")
-        except Exception as e:
-            print(f"[FIRESTORE] Zone seeding skipped: {e}")
+        _seed_zones_firestore()
+        _seed_demo_players_firestore()
 
-        # Siembra jugadores demo con IDs fijos para que cuadre el orden de turnos de game_state
-        try:
-            from datetime import datetime
-            from passlib.context import CryptContext
-            from google.cloud import firestore
-            from cloudrisk_api.configuracion import settings
-
-            DEMO_PLAYERS = [
-                {"id": "demo-player-001", "name": "Comandante Norte", "email": "norte@cloudrisk.app", "password": "demo1234", "gold": 500},
-                {"id": "demo-player-002", "name": "Comandante Sur",   "email": "sur@cloudrisk.app",   "password": "demo1234", "gold": 500},
-                {"id": "demo-player-003", "name": "Comandante Este",  "email": "este@cloudrisk.app",  "password": "demo1234", "gold": 500},
-                {"id": "demo-player-004", "name": "Comandante Oeste", "email": "oeste@cloudrisk.app", "password": "demo1234", "gold": 500},
-            ]
-            pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-            db = firestore.Client(project=os.environ.get("PROJECT_ID", "cloudrisk-local"))
-            col = settings.FIRESTORE_COLLECTION_USERS
-            created = 0
-            for p in DEMO_PLAYERS:
-                doc_ref = db.collection(col).document(p["id"])
-                if not doc_ref.get().exists:
-                    doc_ref.set({
-                        "id": p["id"],
-                        "name": p["name"],
-                        "email": p["email"],
-                        "hashed_password": pwd_ctx.hash(p["password"]),
-                        "clan_id": None,
-                        "steps_total": 0,
-                        "power_points": 0,
-                        "gold": p["gold"],
-                        "level": 1,
-                        "created_at": datetime.utcnow().isoformat(),
-                    })
-                    created += 1
-            print(f"[FIRESTORE] Seeded {created} demo players.")
-        except Exception as e:
-            print(f"[FIRESTORE] Player seeding skipped: {e}")
+    try:
+        from cloudrisk_api.endpoints.turno import ensure_game_setup
+        result = ensure_game_setup()
+        if result:
+            per_player = result.get("setup", {}).get("zones_per_player", {})
+            free = result.get("setup", {}).get("free_zones_total", 0)
+            print(f"[SETUP] Auto-setup done — zones per player: {per_player}, free: {free}")
+    except Exception as e:
+        print(f"[SETUP] Auto-setup skipped: {e}")
 
 
 @app.websocket("/ws/{user_id}")

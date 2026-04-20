@@ -20,7 +20,7 @@ import {
   Activity, Bolt, Crown, Footprints, Gift, Map as MapIcon,
   Medal, Play, Power, Target, Trophy,
   X, Zap, ChevronLeft, Flame, TrendingUp, Swords, Shield, Plus, Minus,
-  BookOpen, ChevronRight, Send,
+  BookOpen, ChevronRight, Send, ScrollText,
   // Iconos para carruseles (reemplazan emojis — monocromo, coloreable)
   Calendar, Repeat, Mountain, MessageCircle, Timer, Utensils, Pill,
   Droplet, Clock, Moon, Snowflake, Flag, Lightbulb,
@@ -35,6 +35,62 @@ import '../styles/urban-pacer.css'
 // Color palette per faction
 // ─────────────────────────────────────────────────────────────
 const FACTION_COLORS = ['#f43f5e', '#06b6d4', '#facc15', '#a855f7', '#ff8c2a', '#5fee9a']
+
+// Single source of truth for the 4 lobby players. Used by the HUD, the bot
+// overlay, SimulateBotsButton, TurnBanner, etc. Keeping it at module scope
+// avoids the drift we had before (BOT_PLAYER_COLORS lacked Norte, hard-coded
+// duplicates in MapView/TurnBanner/SimulateBotsButton).
+const PLAYERS = {
+  'demo-player-001': { key: 'norte', name: 'Norte', color: '#f43f5e' },
+  'demo-player-002': { key: 'sur',   name: 'Sur',   color: '#facc15' },
+  'demo-player-003': { key: 'este',  name: 'Este',  color: '#06b6d4' },
+  'demo-player-004': { key: 'oeste', name: 'Oeste', color: '#a855f7' },
+}
+
+// ─────────────────────────────────────────────────────────────
+// Shared turn-polling singleton — before, 4 components polled
+// /api/v1/turn/ every 3 s independently (TurnBanner, ActionPanel,
+// EndTurnButton, SimulateBotsButton). Now a single interval feeds
+// every subscriber, cutting traffic by 4× and giving consistent
+// reads across components on the same frame.
+// ─────────────────────────────────────────────────────────────
+const _turnPoll = {
+  data: null,
+  listeners: new Set(),
+  interval: null,
+  ensure() {
+    if (this.interval) return
+    const tick = async () => {
+      try {
+        const r = await api.get('/api/v1/turn/')
+        this.data = r.data
+        this.listeners.forEach(fn => { try { fn(this.data) } catch {} })
+      } catch { /* swallow — individual components will fall back to null */ }
+    }
+    tick()
+    this.interval = setInterval(tick, 3000)
+  },
+  stopIfEmpty() {
+    if (this.listeners.size === 0 && this.interval) {
+      clearInterval(this.interval)
+      this.interval = null
+    }
+  },
+}
+
+function useTurnPoll() {
+  const [turn, setTurn] = useState(_turnPoll.data)
+  useEffect(() => {
+    setTurn(_turnPoll.data)
+    _turnPoll.listeners.add(setTurn)
+    _turnPoll.ensure()
+    return () => {
+      _turnPoll.listeners.delete(setTurn)
+      _turnPoll.stopIfEmpty()
+    }
+  }, [])
+  return turn
+}
 const hashColor = (seed) => {
   let h = 0
   const s = String(seed || '')
@@ -1009,19 +1065,13 @@ async function loadValenciaGeoJSON(signal) {
 }
 
 // Per-player colours so every Comandante paints their zones differently.
-// Keys are the seeded player IDs (data/players.json). Falls back to a hash
-// colour for any unknown owner ID so future players still render.
-const PLAYER_COLORS = {
-  'demo-player-001': '#f43f5e',  // Norte  — pink
-  'demo-player-002': '#facc15',  // Sur    — lime
-  'demo-player-003': '#06b6d4',  // Este   — cyan
-  'demo-player-004': '#a855f7',  // Oeste  — violet
-}
+// Fuente única: PLAYERS (módulo). Falls back to a deterministic hash colour
+// for any unknown owner ID so future players still render.
 const FREE_COLOR = '#6b7280'   // neutral grey for unclaimed zones
 
 function colorForOwner(ownerId) {
   if (!ownerId) return FREE_COLOR
-  if (PLAYER_COLORS[ownerId]) return PLAYER_COLORS[ownerId]
+  if (PLAYERS[ownerId]) return PLAYERS[ownerId].color
   // Unknown owner (e.g. future 5th player) → deterministic colour from id hash.
   let h = 0
   for (let i = 0; i < ownerId.length; i++) h = (h * 31 + ownerId.charCodeAt(i)) | 0
@@ -1112,13 +1162,13 @@ function getViewModePaint(mode, battleZoneIds = new Set()) {
   }
 }
 
-function NeonMap({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, viewMode = 'control', battles = [], actionsRef }) {
+const NeonMap = React.memo(NeonMapImpl)
+function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, viewMode = 'control', battles = [], actionsRef }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const markersRef = useRef([])
   const geojsonRef = useRef(null)
   const mapReadyRef = useRef(false)
-  const refreshingRef = useRef(false) // C-4: evita fetches concurrentes sobre el mismo GeoJSON
   const [loadError, setLoadError] = useState(null)
   const [retryTick, setRetryTick] = useState(0)
 
@@ -1211,6 +1261,40 @@ function NeonMap({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, vi
           mapRef.current.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
             padding: 60, duration: 900, maxZoom: 14.5,
           })
+        },
+        // Vuela a una zona concreta (la que ha conquistado / atacado un bot).
+        // Opcional: opts.zoom y opts.duration.
+        flyToZone: (zoneId, opts = {}) => {
+          const gj = geojsonRef.current
+          if (!gj || !mapRef.current) return
+          const f = gj.features.find(ft => ft.properties?.zoneId === zoneId)
+          if (!f) return
+          const [lng, lat] = getCentroid(f.geometry)
+          mapRef.current.easeTo({
+            center: [lng, lat],
+            zoom: opts.zoom ?? 14.2,
+            duration: opts.duration ?? 900,
+            essential: true,
+          })
+        },
+        // Pulso breve sobre una zona — marca 'pulse: true' en feature-state.
+        // El color del pulso lo lee la capa 'zones-pulse' desde la propia
+        // propiedad `color` de la feature (color del owner actual), así NO
+        // tenemos que mutar el GeoJSON ni llamar setData — sólo feature-state.
+        pulseZone: (zoneId, { duration = 2200 } = {}) => {
+          const map = mapRef.current
+          const gj = geojsonRef.current
+          if (!map || !gj) return
+          const f = gj.features.find(ft => ft.properties?.zoneId === zoneId)
+          if (!f) return
+          try {
+            map.setFeatureState({ source: 'zones', id: f.id }, { pulse: true })
+            setTimeout(() => {
+              try {
+                map.setFeatureState({ source: 'zones', id: f.id }, { pulse: false })
+              } catch {}
+            }, duration)
+          } catch {}
         },
       }
     }
@@ -1398,24 +1482,58 @@ function NeonMap({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, vi
         },
       })
 
+      // Pulse layer — activada vía feature-state 'pulse' cuando un bot
+      // ataca / conquista / fortifica. Pinta un borde grueso del color del
+      // propio polígono (propiedad `color` = owner) durante ~2s.
+      // No intercepta clicks (type=line) y evita cualquier setData.
+      map.addLayer({
+        id: 'zones-pulse',
+        type: 'line',
+        source: 'zones',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': [
+            'case',
+            ['boolean', ['feature-state', 'pulse'], false], 8,
+            0,
+          ],
+          'line-opacity': [
+            'case',
+            ['boolean', ['feature-state', 'pulse'], false], 0.9,
+            0,
+          ],
+          'line-blur': 2,
+        },
+      })
+
       rebuildMarkers()
 
       // ── Battlefield layers (inserted before zones-border to preserve order) ──
-      // Fog of War: unclaimed zones (lime) get a dark overlay → feel unexplored
+      // Fog of War: unclaimed zones get a dark overlay → feel unexplored.
+      //
+      // BUG encontrado en la auditoría: el filtro original era
+      // `['==', ['get', 'color'], '#facc15']` porque en la paleta ANTIGUA el
+      // amarillo lima era el color de "libre". La paleta actual (FREE_COLOR
+      // = '#6b7280' gris) asigna amarillo al jugador Sur, así que la niebla
+      // de guerra se estaba pintando encima de las zonas de Sur y dejaba
+      // sólo los bordes amarillos visibles (sin fill). Nueva regla: filtrar
+      // explícitamente por FREE_COLOR (gris).
       map.addLayer({
         id: 'zones-fog',
         type: 'fill',
         source: 'zones',
-        filter: ['==', ['get', 'color'], '#facc15'],
+        filter: ['==', ['get', 'color'], FREE_COLOR],
         paint: { 'fill-color': '#000205', 'fill-opacity': 0.38 },
       }, 'zones-border')
 
-      // Owned/rival glow: animated breathing fill — territories feel alive
+      // Owned/rival glow: animated breathing fill — territories feel alive.
+      // Misma corrección: antes excluía amarillo pensando que era "libre";
+      // ahora excluye explícitamente el color de libre (gris).
       map.addLayer({
         id: 'zones-owned-glow',
         type: 'fill',
         source: 'zones',
-        filter: ['!=', ['get', 'color'], '#facc15'],
+        filter: ['!=', ['get', 'color'], FREE_COLOR],
         paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.28 },
       }, 'zones-fog')
 
@@ -1478,36 +1596,42 @@ function NeonMap({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, vi
     }
   }, [retryTick, rebuildMarkers]) // NO depende de currentUserId/ClanId
 
-  // #3b — Refrescar overlay cuando cambia refreshKey (tras deploy/attack/fortify)
-  // C-4: refreshingRef serializa fetches concurrentes para evitar mutación paralela del GeoJSON
+  // #3b — Refrescar overlay cuando cambia refreshKey (tras deploy/attack/fortify).
+  //
+  // BUG detectado en la auditoría: el antiguo guard `refreshingRef` serializaba
+  // los fetches pero descartaba el segundo bump si venía antes de que terminase
+  // el primero. En un fortify `handleSuccess()` bumpea refreshKey y al instante
+  // `refreshData()` actualiza `zones` → efecto en MapView vuelve a bumpear
+  // refreshKey → el segundo bump llegaba con el primer fetch aún en vuelo y se
+  // ignoraba. El primer fetch traía datos (nuevos o viejos según timing de
+  // Firestore) y el mapa quedaba con los números cruzados, como denunciaste
+  // con Ciutat Fallera ↔ Sant Llorenç.
+  //
+  // Ahora cada bump dispara su propio fetch. La variable local `cancelled`
+  // (seteada por el cleanup del effect anterior cuando llega el nuevo) descarta
+  // las respuestas obsoletas, así que el último bump siempre pinta el último.
   useEffect(() => {
     if (refreshKey === 0 || !mapReadyRef.current) return
     const map = mapRef.current
     const gj = geojsonRef.current
     if (!map || !gj) return
-    if (refreshingRef.current) return
     let cancelled = false
-    refreshingRef.current = true
     ;(async () => {
+      let serverData = []
       try {
-        let serverData = []
+        const r = await api.get('/api/v1/state/locations')
+        serverData = Array.isArray(r.data) ? r.data : []
+      } catch {
         try {
-          const r = await api.get('/api/v1/state/locations')
+          const r = await api.get('/api/v1/zones/')
           serverData = Array.isArray(r.data) ? r.data : []
-        } catch {
-          try {
-            const r = await api.get('/api/v1/zones/')
-            serverData = Array.isArray(r.data) ? r.data : []
-          } catch {}
-        }
-        if (cancelled || !mapRef.current) return
-        const enriched = applyServerDataToGeoJSON(gj, serverData, clanIdRef.current, userIdRef.current)
-        geojsonRef.current = enriched
-        map.getSource('zones')?.setData(enriched)
-        rebuildMarkers()
-      } finally {
-        refreshingRef.current = false
+        } catch {}
       }
+      if (cancelled || !mapRef.current) return
+      const enriched = applyServerDataToGeoJSON(gj, serverData, clanIdRef.current, userIdRef.current)
+      geojsonRef.current = enriched
+      map.getSource('zones')?.setData(enriched)
+      rebuildMarkers()
     })()
     return () => { cancelled = true }
   }, [refreshKey, rebuildMarkers])
@@ -1587,6 +1711,19 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
   const [zonesError, setZonesError] = useState(false)
   const [targetZone, setTargetZone] = useState('') // for fortify: destination zone id
   const [attackResult, setAttackResult] = useState(null)  // { attacker_rolls, defender_rolls, conquered, ... }
+  const turn = useTurnPoll()
+  // Contexto del ataque precalculado al abrir el modal: ¿quién defiende la
+  // zona?, ¿cuántas tropas tiene?, ¿tengo alguna zona propia adyacente con
+  // ≥2 tropas desde la que atacar? Así desactivamos "LANZAR OFENSIVA" antes
+  // de que el usuario clique en vano y mostramos info útil DE LA ZONA OBJETIVO
+  // (en vez de mi balance de tropas, que en un modal de ataque no pinta nada).
+  const [attackContext, setAttackContext] = useState({
+    loaded: false, validOrigins: [], targetDefense: 0, targetOwner: null,
+  })
+  // Gate antes de que el backend rechace el round-trip: leemos /turn/ via
+  // el poller compartido. Si no es mi turno, mostramos un banner y
+  // desactivamos el botón de acción (evita 403 silenciosos).
+  const isMyTurn = !turn || turn.current_player_id === user?.id
 
   useEffect(() => {
     let cancelled = false
@@ -1607,6 +1744,73 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
     }
     return () => { cancelled = true }
   }, [kind, zone?.id])
+
+  // (poller /turn/ centralizado vía useTurnPoll arriba)
+
+  // Precarga del contexto de ataque: una sola vez al abrir el modal sobre
+  // una zona enemiga. Si luego cambian las zonas (yo conquisto algo nuevo)
+  // el usuario ya habrá cerrado y reabierto el modal, así que no hace falta
+  // refrescar esto en un interval.
+  //
+  // Mantenemos un normalizador (NFD + quitar no-alfanumérico) por seguridad:
+  // si en el futuro el backend vuelve a emitir ids incoherentes entre
+  // /zones/ y /zones/adjacency, el modal de ataque sigue funcionando sin
+  // exigir un hotfix urgente. Con los seeds ya alineados el `fast-path`
+  // exacto resuelve siempre en la primera iteración.
+  useEffect(() => {
+    if (kind !== 'attack' || !zone?.id) return
+    let cancelled = false
+    Promise.all([
+      api.get('/api/v1/zones/adjacency'),
+      api.get('/api/v1/zones/'),
+    ]).then(([adjRes, zonesRes]) => {
+      if (cancelled) return
+      const adj = adjRes.data?.adjacency || {}
+      const allZones = zonesRes.data || []
+      const target = allZones.find(z => z.id === zone.id)
+
+      // Normaliza un id para esquivar el mismatch de slugs del backend.
+      // 'zona-l-amistat' y 'zona-lamistat' → 'zonalamistat'; diacríticos fuera.
+      const norm = (s) => String(s || '')
+        .normalize('NFD').replace(/\p{Diacritic}/gu, '')
+        .toLowerCase().replace(/[^a-z0-9]/g, '')
+
+      // Intento 1 (fast path): id exacto.
+      let neighborList = adj[zone.id]
+      // Intento 2: buscar alguna clave de adj que normalice al mismo valor que
+      // la zona que estoy atacando.
+      if (!neighborList) {
+        const targetNorm = norm(zone.id)
+        for (const k of Object.keys(adj)) {
+          if (norm(k) === targetNorm) { neighborList = adj[k]; break }
+        }
+      }
+      const neighborIdsRaw = Array.isArray(neighborList) ? neighborList : []
+      const neighborsNorm = new Set(neighborIdsRaw.map(norm))
+
+      const myValid = allZones.filter(z =>
+        z.owner_clan_id === user?.id &&
+        (z.defense_level || 0) >= 2 &&
+        neighborsNorm.has(norm(z.id))
+      )
+      if (import.meta.env.DEV && neighborIdsRaw.length > 0 && myValid.length === 0) {
+        // Ayuda a diagnosticar futuros mismatches de slug.
+        console.warn('[attack] no valid origins; adj neighbors=', neighborIdsRaw)
+      }
+      setAttackContext({
+        loaded: true,
+        validOrigins: myValid,
+        targetDefense: Number(target?.total_armies ?? target?.defense_level ?? zone.total_armies ?? zone.defense_level ?? 0),
+        targetOwner: target?.owner_clan_id ?? zone.owner_clan_id ?? null,
+      })
+    }).catch(() => {
+      // Si el endpoint falla, dejamos loaded=true con origins vacío pero sin
+      // bloquear — el check post-click en handleAction seguirá actuando de
+      // red de seguridad.
+      if (!cancelled) setAttackContext(s => ({ ...s, loaded: true }))
+    })
+    return () => { cancelled = true }
+  }, [kind, zone?.id, user?.id])
 
   const max = kind === 'fortify'
     ? Math.max(0, (zone?.total_armies || 1) - 1) // must leave at least 1
@@ -1644,20 +1848,13 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
         setSuccess(r.data?.message || 'Tropas movidas correctamente.')
       } else if (kind === 'attack') {
         // Regla Risk: sólo puedes atacar una zona ADYACENTE a una tuya.
-        // 1. Cargamos el grafo de vecinos + todas las zonas.
-        // 2. Filtramos mis zonas que estén adyacentes al objetivo Y tengan >=2 armies.
-        // 3. Elegimos la más fuerte como origen.
-        const [zonesRes, adjRes] = await Promise.all([
-          api.get('/api/v1/zones/'),
-          api.get('/api/v1/zones/adjacency'),
-        ])
-        const adj = adjRes.data?.adjacency || {}
-        const neighborIds = new Set(adj[zone.id] || [])
-        const mineAdjacent = (zonesRes.data || []).filter(z =>
-          z.owner_clan_id === user?.id &&
-          (z.defense_level || 0) >= 2 &&
-          neighborIds.has(z.id)
-        )
+        // Antes se duplicaba aquí la lógica de adyacencia (sin el normalizador
+        // de slugs) y fallaba para zonas como L'Amistat cuyo id no coincide
+        // entre /zones/ y /zones/adjacency. Ahora reutilizamos directamente
+        // `attackContext.validOrigins` — lo calcula el efecto que abre el
+        // modal (con normalización NFD + quitando no-alfanuméricos) y es la
+        // misma fuente que muestra "MIS ADY." en la UI.
+        const mineAdjacent = attackContext.validOrigins || []
         if (mineAdjacent.length === 0) {
           setError(
             'No puedes atacar esta zona: no es adyacente a ninguna zona tuya con >=2 tropas. ' +
@@ -1723,12 +1920,12 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
         </div>
 
         <div className="p-6 space-y-4">
-          {kind !== 'fortify' && balanceError && (
+          {kind === 'deploy' && balanceError && (
             <div className="px-4 py-2 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs">
               No se pudo cargar tu balance de tropas. El despliegue puede no reflejar tu saldo real.
             </div>
           )}
-          {kind !== 'fortify' && balance && (
+          {kind === 'deploy' && balance && (
             <div className="grid grid-cols-3 gap-2">
               <div className="rounded-xl p-3 bg-white/5 border border-white/10 text-center">
                 <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Disponibles</div>
@@ -1744,8 +1941,85 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
               </div>
             </div>
           )}
+          {/* En el modal de ATAQUE las pills útiles son las de la zona OBJETIVO
+              (defensa / propietario / zonas mías adyacentes desde las que atacar),
+              no mi balance personal — que para Risk da igual, ataco con las
+              tropas ya desplegadas en el mapa. */}
+          {kind === 'attack' && (() => {
+            const ownerNames = {
+              'demo-player-001': 'Norte', 'demo-player-002': 'Sur',
+              'demo-player-003': 'Este',  'demo-player-004': 'Oeste',
+            }
+            const ownerColors = {
+              'demo-player-001': '#f43f5e', 'demo-player-002': '#facc15',
+              'demo-player-003': '#06b6d4', 'demo-player-004': '#a855f7',
+            }
+            const owner = attackContext.targetOwner
+            const ownerLabel = owner ? (ownerNames[owner] || owner.slice(0, 6)) : 'Libre'
+            const ownerColor = owner ? (ownerColors[owner] || '#9ca3af') : '#9ca3af'
+            const adyCount = attackContext.validOrigins.length
+            const adyColor = adyCount > 0 ? '#c8ff00' : '#6b7280'
+            return (
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-xl p-3 bg-white/5 border border-white/10 text-center">
+                  <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Defensa</div>
+                  <div className="text-xl font-display font-extrabold" style={{ color: '#f43f5e' }}>
+                    {attackContext.loaded ? attackContext.targetDefense : '—'}
+                  </div>
+                </div>
+                <div className="rounded-xl p-3 bg-white/5 border border-white/10 text-center">
+                  <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Propietario</div>
+                  <div className="text-sm font-display font-extrabold truncate" style={{ color: ownerColor }}>
+                    {attackContext.loaded ? ownerLabel : '…'}
+                  </div>
+                </div>
+                <div
+                  className="rounded-xl p-3 bg-white/5 border border-white/10 text-center"
+                  title="Zonas tuyas adyacentes a este objetivo con ≥2 tropas (desde donde puedes lanzar el ataque)."
+                >
+                  <div className="text-[9px] uppercase tracking-widest text-white/50 font-bold">Mis Ady.</div>
+                  <div className="text-xl font-display font-extrabold" style={{ color: adyColor }}>
+                    {attackContext.loaded ? adyCount : '—'}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+          {/* Aviso claro cuando no hay ninguna zona mía adyacente con tropas:
+              es la razón #1 por la que "no puedo atacar ciertas zonas". Mejor
+              pillarlo aquí que en el error post-click. */}
+          {kind === 'attack' && attackContext.loaded && attackContext.validOrigins.length === 0 && isMyTurn && (
+            <div className="px-4 py-3 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs flex items-start gap-2">
+              <span className="text-base leading-none">⚠️</span>
+              <span>
+                No tienes ninguna zona adyacente a ésta con ≥2 tropas. Conquista
+                primero un barrio vecino (o refuerza uno que ya toque el objetivo).
+              </span>
+            </div>
+          )}
 
           <p className="text-white/70 text-sm">{cfg.desc}</p>
+
+          {!isMyTurn && (
+            <div className="px-4 py-3 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-xs flex items-start gap-2">
+              <span className="text-base leading-none">⏳</span>
+              <span>
+                No es tu turno. Espera a que {turn?.current_player_id ? `${turn.current_player_id.replace(/^demo-player-/, 'jugador ')} ` : ''}
+                termine para {kind === 'attack' ? 'atacar' : kind === 'fortify' ? 'mover tropas' : 'desplegar'}.
+              </span>
+            </div>
+          )}
+
+          {kind === 'deploy' && balance && Number(balance.armies_available || 0) === 0 && (
+            <div className="px-4 py-3 rounded-xl bg-neon-cyan/10 border border-neon-cyan/30 text-neon-cyan text-xs flex items-start gap-2">
+              <span className="text-base leading-none">🚶</span>
+              <span>
+                No tienes tropas disponibles. Camina por la ciudad para ganarlas: cada {' '}
+                500 pasos ={' '}
+                1 army (máx 50 al día).
+              </span>
+            </div>
+          )}
 
           {/* Fortify: zona origen → zona destino */}
           {kind === 'fortify' && (
@@ -1855,7 +2129,13 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            disabled={loading || (kind === 'fortify' && max === 0)}
+            disabled={
+              loading
+              || !isMyTurn
+              || (kind === 'fortify' && max === 0)
+              || (kind === 'deploy' && Number(balance?.armies_available || 0) === 0)
+              || (kind === 'attack' && attackContext.loaded && attackContext.validOrigins.length === 0)
+            }
             onClick={handleAction}
             className="w-full py-4 rounded-2xl font-display font-bold text-white flex items-center justify-center gap-2 disabled:opacity-50"
             style={{
@@ -1865,7 +2145,7 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
             }}
           >
             <Icon className="w-5 h-5" />
-            {loading ? 'Procesando...' : kind === 'attack' ? `LANZAR OFENSIVA` : `${cfg.label} ${amount} TROPAS`}
+            {loading ? 'Procesando...' : !isMyTurn ? 'ESPERA TU TURNO' : kind === 'attack' ? `LANZAR OFENSIVA` : `${cfg.label} ${amount} TROPAS`}
           </motion.button>
         </div>
       </motion.div>
@@ -1943,9 +2223,13 @@ function RightPanel({ player, clans, missions, battleHistory, leaderboard, zones
   return (
     <motion.div
       initial={{ x: 30, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.1 }}
-      // self-start + justify-start → columna ocupa sólo altura de su
-      // contenido y tab bar ancla al top (sin hueco muerto arriba).
-      className="col-span-3 flex flex-col justify-start gap-2 self-start"
+      // w-full: cuando se usa dentro de un flex-col, self-start colapsaba el
+      //   panel al ancho mínimo de su contenido (~250 px frente a los 446 px
+      //   del resto de cards de la columna). Forzamos w-full para que ocupe
+      //   todo el ancho disponible de la columna padre.
+      // col-span-3: conservado por si el componente vuelve a usarse como
+      //   hijo directo de un grid en otro lado — es inocuo dentro de flex.
+      className="col-span-3 w-full flex flex-col justify-start gap-2"
     >
       {/* Tab bar */}
       <div className="flex gap-1 rounded-xl p-1" style={{ background: 'rgba(255,255,255,0.05)' }}>
@@ -2057,7 +2341,14 @@ function RightPanel({ player, clans, missions, battleHistory, leaderboard, zones
                     className={`flex items-center gap-2 rounded-xl px-2.5 py-2 border transition ${!won && !ongoing ? 'opacity-55' : ''}`}
                     style={{ background: 'rgba(200,255,0,0.03)', borderColor: 'rgba(200,255,0,0.15)' }}>
                     <span className="text-[9px] font-black uppercase tracking-widest flex-shrink-0" style={{ color: labelColor }}>{label}</span>
-                    <span className="flex-1 text-xs text-white truncate">{b.zone_name || 'Zona'}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs text-white truncate">{b.zone_name || 'Zona'}</div>
+                      {b.attacker_rolls?.length > 0 && (
+                        <div className="text-[9px] text-white/40">
+                          [{b.attacker_rolls.join(',')}] vs [{(b.defender_rolls || []).join(',')}]
+                        </div>
+                      )}
+                    </div>
                     {ongoing ? (
                       <button
                         onClick={() => handleResolve(b.id)}
@@ -2640,11 +2931,16 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
   const [claimReward, setClaimReward] = useState(null)
   const [burst, setBurst] = useState([])
 
-  // Bug 84 libres: el backend puede devolver más zonas que el GeoJSON (49 distritos reales).
-  // Mostramos siempre sobre base 49 para que el número sea coherente con el mapa.
-  const TOTAL_DISTRICTS = 49
+  // El botón "Jugar turnos de bots" vive ahora en el HUD del mapa
+  // (SimulateBotsButton, junto al TurnBanner/EndTurnButton). Aquí en el
+  // lobby no pinta nada: cuando estás en el Dashboard aún no ha empezado
+  // la partida en el sentido visual del mapa.
+
+  // Contadores del HUD: usamos el total real de zonas del backend (86 en v3)
+  // en vez del cap artificial de 49 que teníamos antes — con setup inicial
+  // hay 60 ocupadas (15×4) y el cap dejaba LIBRES en 0 por el max(0, 49-60).
   const conquered = zones.filter(z => z.owner_clan_id).length
-  const unclaimed = Math.max(0, TOTAL_DISTRICTS - conquered)
+  const unclaimed = zones.filter(z => !z.owner_clan_id).length
   const xpPct = Math.min(100, (player.power_points / 1000) * 100)
 
   // Zapatilla — desgaste. El desgaste se comunica por LUMINANCIA, no por
@@ -2737,7 +3033,7 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-display font-extrabold text-white text-lg leading-none">{player.name}</span>
+              <NameEditor fallback={player.name} />
               <span
                 className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest"
                 style={{
@@ -2928,7 +3224,7 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
             </div>
             <div className="space-y-2">
               {[
-                { id: 'demo-player-001', name: 'Comandante Norte',  color: '#f43f5e' },
+                { id: 'demo-player-001', name: getNorteName(), color: '#f43f5e', isMe: true },
                 { id: 'demo-player-002', name: 'Comandante Sur',    color: '#facc15' },
                 { id: 'demo-player-003', name: 'Comandante Este',   color: '#06b6d4' },
                 { id: 'demo-player-004', name: 'Comandante Oeste',  color: '#a855f7' },
@@ -2944,29 +3240,27 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
                 </div>
               ))}
             </div>
+
           </div>
 
-          {/* Misiones (mini-card del lobby — versión corta) — brand palette */}
-          <div className="rounded-2xl p-4 backdrop-blur-xl border border-white/10"
-            style={{ background: 'rgba(255,255,255,0.04)' }}>
-            <div className="flex items-center gap-2 mb-3">
-              <Target className="w-4 h-4" style={{ color: '#c8ff00' }} />
-              <h3 className="font-display font-bold text-white text-xs uppercase tracking-widest">Misiones</h3>
-            </div>
-            <div className="space-y-2">
-              {[
-                { icon: Footprints, label: 'Camina 5000 pasos', xp: 50, done: player.steps_total >= 5000 },
-                { icon: Crown,      label: 'Conquista 1 zona',  xp: 100, done: false },
-                { icon: Flame,      label: 'Gana 1 batalla',    xp: 75, done: false },
-              ].map(({ icon: Icon, label, xp, done }) => (
-                <div key={label} className={`flex items-center gap-2 text-xs ${done ? 'opacity-40' : ''}`}>
-                  <Icon className="w-3.5 h-3.5 flex-shrink-0" style={{ color: '#c8ff00' }} />
-                  <span className={`flex-1 text-white ${done ? 'line-through' : ''}`}>{label}</span>
-                  <span className="font-bold text-[10px]" style={{ color: '#c8ff00' }}>+{xp}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          {/* RightPanel: tabs Misiones | Batallas | Top.
+              Sustituye a la mini-card hardcoded de 3 misiones falsas que
+              había aquí antes — ahora muestra las 5 misiones reales del
+              backend, el historial de batallas y el leaderboard. Antes este
+              panel se renderizaba como un 4.º `col-span-3` en el grid y
+              hacía wrap a una segunda fila FUERA del viewport (main tiene
+              overflow-hidden), quedando invisible para el usuario. */}
+          <RightPanel
+            player={player}
+            clans={clans}
+            missions={missions}
+            battleHistory={battleHistory}
+            leaderboard={leaderboard}
+            zones={zones}
+            loading={loading}
+            onClaimMission={onClaimMission}
+            onBattleResolved={onRefresh}
+          />
 
           {/* Consejos para runners — carrusel rotativo de 12 tips
               curados de Big Issue, adidas, Running Channel, Runner's
@@ -2974,19 +3268,6 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
               manualmente pulsando la flecha. */}
           <RunningTipsCarousel />
         </motion.div>
-
-        {/* RIGHT — Tabs: Misiones | Batallas | Top (diseño restaurado) */}
-        <RightPanel
-          player={player}
-          clans={clans}
-          missions={missions}
-          battleHistory={battleHistory}
-          leaderboard={leaderboard}
-          zones={zones}
-          loading={loading}
-          onClaimMission={onClaimMission}
-          onBattleResolved={onRefresh}
-        />
       </main>
 
       {/* ── FOOTER STATS BAR ──
@@ -3162,31 +3443,65 @@ function DiceRollPanel({ result }) {
 // ─────────────────────────────────────────────────────────────
 // TURN BANNER — "Tu turno" when it's your player, otherwise who plays
 // ─────────────────────────────────────────────────────────────
+// ── Nombre personalizado del jugador humano (Norte) ──────────────────────────
+// Se guarda en localStorage para persistir entre sesiones.
+const PLAYER_NAME_KEY = 'cloudrisk_player_name'
+function getNorteName() {
+  return localStorage.getItem(PLAYER_NAME_KEY) || 'Norte'
+}
+
+function NameEditor({ fallback }) {
+  const stored = localStorage.getItem(PLAYER_NAME_KEY)
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(stored || fallback || 'Norte')
+
+  const save = (val) => {
+    const v = val.trim() || fallback || 'Norte'
+    setName(v)
+    localStorage.setItem(PLAYER_NAME_KEY, v)
+    setEditing(false)
+  }
+
+  if (editing) return (
+    <input
+      autoFocus
+      className="font-display font-extrabold text-white text-lg bg-transparent border-b-2 outline-none w-44"
+      style={{ borderColor: '#c8ff00' }}
+      value={name}
+      onChange={e => setName(e.target.value)}
+      onBlur={e => save(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Enter') save(name)
+        if (e.key === 'Escape') setEditing(false)
+      }}
+    />
+  )
+
+  return (
+    <button onClick={() => setEditing(true)} className="flex items-center gap-2 group text-left">
+      <span className="font-display font-extrabold text-white text-lg leading-none">{name}</span>
+      <span
+        className="text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-widest"
+        style={{ background: 'rgba(200,255,0,0.18)', color: '#c8ff00', border: '1px solid rgba(200,255,0,0.35)' }}
+      >
+        Yo ✏
+      </span>
+    </button>
+  )
+}
+
 function TurnBanner({ myUserId }) {
-  const [turn, setTurn] = useState(null)
-  useEffect(() => {
-    let alive = true
-    const fetchOnce = async () => {
-      try {
-        const r = await api.get('/api/v1/turn/')
-        if (alive) setTurn(r.data)
-      } catch { /* not wired yet */ }
-    }
-    fetchOnce()
-    const id = setInterval(fetchOnce, 3000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
+  const turn = useTurnPoll()
 
   if (!turn) return null
   const mine = turn.current_player_id === myUserId
-  const names = {
-    'demo-player-001': 'Norte',
-    'demo-player-002': 'Sur',
-    'demo-player-003': 'Este',
-    'demo-player-004': 'Oeste',
-  }
-  const who = names[turn.current_player_id] || turn.current_player_id.slice(0, 8)
-  const tone = mine ? '#facc15' : '#f43f5e'
+  const p = PLAYERS[turn.current_player_id]
+  const who = turn.current_player_id === 'demo-player-001'
+    ? getNorteName()
+    : (p?.name || turn.current_player_id.slice(0, 8))
+  // Mi turno → verde lima; turno de un rival → color del rival (así
+  // el jugador asocia el banner al color del bot que juega ahora).
+  const tone = mine ? '#facc15' : (p?.color || '#f43f5e')
   return (
     <div
       className="px-4 py-2.5 rounded-full backdrop-blur-xl border bg-black/70 flex items-center gap-2 font-bold text-sm"
@@ -3285,31 +3600,334 @@ function TroopsReadout({ zones = [], currentUserId, myColor = '#facc15' }) {
 }
 
 function EndTurnButton({ myUserId }) {
-  const [turn, setTurn] = useState(null)
+  const turn = useTurnPoll()
   const [busy, setBusy] = useState(false)
-  useEffect(() => {
-    let alive = true
-    const poll = async () => {
-      try { const r = await api.get('/api/v1/turn/'); if (alive) setTurn(r.data) }
-      catch (e) { if (import.meta.env.DEV) console.warn('[turn poll]', e?.message || e) }
-    }
-    poll()
-    const id = setInterval(poll, 3000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
-  if (!turn || turn.current_player_id !== myUserId) return null
-  const end = async () => {
+  const mine = !!turn && turn.current_player_id === myUserId
+
+  const end = useCallback(async () => {
     setBusy(true)
     try { await api.post('/api/v1/turn/end') } finally { setBusy(false) }
-  }
+  }, [])
+
+  // Atajo de teclado: Enter termina el turno cuando es el mío y no hay
+  // un input con foco (drawer, modales, etc.). Atajo solicitado en la
+  // auditoría UX.
+  useEffect(() => {
+    if (!mine) return
+    const onKey = (e) => {
+      if (e.key !== 'Enter') return
+      const ae = document.activeElement
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return
+      if (busy) return
+      e.preventDefault()
+      end()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mine, busy, end])
+
+  if (!mine) return null
   return (
     <button
       onClick={end} disabled={busy}
+      title="Termina tu turno (Enter)"
       className="px-6 py-2.5 rounded-full bg-white text-black font-bold text-[11px] uppercase tracking-nike-wide
                  hover:bg-neon-lime transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed
                  flex items-center gap-2"
     >
-      {busy ? '...' : (<>Terminar turno <span aria-hidden="true">→</span></>)}
+      {busy ? '...' : (<>Terminar turno <span aria-hidden="true">↵</span></>)}
+    </button>
+  )
+}
+
+// Vive junto a EndTurnButton en el HUD del mapa — cuando NO es mi turno,
+// este botón encadena llamadas a /simulate_bots/run en modo "step" (un bot
+// por llamada, pausa de 4.5 s) hasta que vuelve mi turno. Así se ve:
+//  - El TurnBanner cambiando: "Turno de Sur" → "Turno de Este" → "Turno de Oeste"
+//  - El mapa repintándose entre bot y bot gracias al onRefresh
+// ─────────────────────────────────────────────────────────────
+// Bot action overlay — animated cards for attack / conquer / fortify
+// ─────────────────────────────────────────────────────────────
+const META_ACTION = {
+  attack:  { emoji: '⚔️', label: 'ATACA',    glow: '#f43f5e' },
+  conquer: { emoji: '🏴', label: 'CONQUISTA', glow: '#facc15' },
+  fortify: { emoji: '🛡️', label: 'FORTIFICA', glow: '#06b6d4' },
+}
+
+/**
+ * Overlay de acciones de bot.
+ *
+ * Cambios vs la versión anterior:
+ *  - Cola propia con auto-dismiss (4.5 s por tarjeta). Antes las tarjetas
+ *    se quedaban pegadas hasta que llegaba otro setBattleEvents y se
+ *    solapaban con el TroopsReadout.
+ *  - Máximo 4 tarjetas visibles — si llegan más se evaporan las más
+ *    antiguas (FIFO). Evita que un bot con 15 acciones haga scroll infinito.
+ *  - Posición movida a `right-4 bottom-28`: deja libre el flanco izquierdo
+ *    (SimulateBotsButton banner) y no pisa TroopsReadout (center bottom).
+ *  - Acepta `mapActionsRef` para que, al aparecer cada evento, la cámara
+ *    vuele a la zona afectada y la zona pulse con el color del bot. Así el
+ *    jugador VE dónde pasa la cosa en lugar de sólo leer tarjetas.
+ *  - Cada evento muestra mini-contador de tiempo restante (barra inferior)
+ *    para que el feedback de "se va a ir" sea obvio.
+ *  - Se respeta prefers-reduced-motion: sin spring, sin pulso, transición simple.
+ */
+const BattleEventOverlay = React.memo(BattleEventOverlayImpl)
+function BattleEventOverlayImpl({ events, mapActionsRef, myUserId }) {
+  const [queue, setQueue] = useState([])
+  const seenRef = useRef(new Set())
+  const reduceMotion = useReducedMotionCached()
+
+  // Ingresa eventos nuevos en la cola, aplicando fly-to + pulse en el mapa.
+  useEffect(() => {
+    if (!events || events.length === 0) return
+    const fresh = events.filter(ev => ev._key && !seenRef.current.has(ev._key))
+    if (fresh.length === 0) return
+    fresh.forEach(ev => seenRef.current.add(ev._key))
+    setQueue(q => {
+      const combined = [...q, ...fresh]
+      return combined.slice(-4) // máximo 4 tarjetas simultáneas
+    })
+    // Encadenamos fly-to con 250 ms de offset entre acciones para que no
+    // la cámara no brinque como una mosca. Sólo volamos para acciones que
+    // tienen zone_id (idle ya viene filtrado por el caller).
+    const actions = mapActionsRef?.current
+    if (!actions) return
+    fresh.forEach((ev, i) => {
+      const zoneId = ev.zone_id
+      if (!zoneId) return
+      const color = PLAYERS[ev.bot]?.color || '#ffffff'
+      setTimeout(() => {
+        try {
+          actions.flyToZone?.(zoneId, { zoom: 14.2, duration: 750 })
+          actions.pulseZone?.(zoneId, { color, duration: 2200 })
+        } catch {}
+      }, i * 250)
+    })
+  }, [events, mapActionsRef])
+
+  // Auto-dismiss: cada tarjeta vive 4.5 s desde que entra en cola.
+  useEffect(() => {
+    if (queue.length === 0) return
+    const oldest = queue[0]
+    const t = setTimeout(() => {
+      setQueue(q => q.filter(ev => ev._key !== oldest._key))
+    }, 4500)
+    return () => clearTimeout(t)
+  }, [queue])
+
+  // Limpieza de `seenRef` cuando no hay nada en cola para que no crezca sin
+  // fin durante una partida larga.
+  useEffect(() => {
+    if (queue.length === 0) seenRef.current = new Set()
+  }, [queue])
+
+  if (queue.length === 0) return null
+  return (
+    <div
+      className="absolute right-4 bottom-28 z-30 flex flex-col gap-2 max-w-[280px] pointer-events-none"
+      role="status" aria-live="polite" aria-label="Acciones de los bots"
+    >
+      <AnimatePresence initial={false}>
+        {queue.map((ev) => {
+          const m = META_ACTION[ev.action] || { emoji: '•', label: String(ev.action || '').toUpperCase(), glow: '#fff' }
+          const botColor = PLAYERS[ev.bot]?.color || '#fff'
+          // Si el bot ataca/conquista una zona MÍA, destacamos con emoji
+          // de aviso para que el jugador lo registre al vuelo.
+          const attacksMe = ev.owner_user_id === myUserId && (ev.action === 'attack' || ev.action === 'conquer')
+          return (
+            <motion.div
+              key={ev._key}
+              layout
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 40, scale: 0.9 }}
+              animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0, scale: 1 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 40, scale: 0.9 }}
+              transition={reduceMotion ? { duration: 0.15 } : { type: 'spring', damping: 22, stiffness: 260 }}
+              className="relative rounded-2xl px-3 py-2.5 backdrop-blur-xl border overflow-hidden"
+              style={{
+                background: `${m.glow}14`,
+                borderColor: attacksMe ? `${m.glow}cc` : `${m.glow}50`,
+                boxShadow: attacksMe ? `0 0 26px ${m.glow}55` : `0 0 18px ${m.glow}22`,
+              }}
+            >
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: botColor, boxShadow: `0 0 6px ${botColor}` }} />
+                <span className="font-bold text-[10px] uppercase tracking-widest truncate" style={{ color: botColor }}>
+                  {ev.botName}
+                </span>
+                <span className="ml-auto text-[10px] font-black px-1.5 py-0.5 rounded-full"
+                  style={{ background: `${m.glow}22`, color: m.glow }}>
+                  {m.emoji} {m.label}
+                </span>
+              </div>
+              {ev.action === 'attack' && (
+                <div className="text-[11px] leading-snug">
+                  {ev.from_zone_name && <span className="text-white/55">{ev.from_zone_name} </span>}
+                  <span className="text-white/35">→ </span>
+                  <span className="font-bold" style={{ color: m.glow }}>{ev.zone_name}</span>
+                  {attacksMe && <span className="ml-1 text-[9px] font-black text-white bg-rose-600/90 px-1.5 py-0.5 rounded-full">¡TE ATACA!</span>}
+                </div>
+              )}
+              {ev.action === 'conquer' && (
+                <div className="text-[11px] font-bold" style={{ color: m.glow }}>
+                  {ev.zone_name}
+                  {attacksMe && <span className="ml-1 text-[9px] font-black text-white bg-rose-600/90 px-1.5 py-0.5 rounded-full">¡TE LA QUITA!</span>}
+                </div>
+              )}
+              {ev.action === 'fortify' && (
+                <div className="text-[11px]">
+                  <span className="text-white/55">{ev.zone_name}</span>
+                  {ev.prev_defense != null && ev.new_defense != null && (
+                    <span className="text-white/35"> {ev.prev_defense}→{ev.new_defense}</span>
+                  )}
+                </div>
+              )}
+              {/* Barra de vida de la tarjeta — 4.5 s fading */}
+              <motion.div
+                initial={{ scaleX: 1 }}
+                animate={{ scaleX: 0 }}
+                transition={{ duration: 4.5, ease: 'linear' }}
+                className="absolute left-0 bottom-0 h-[2px] origin-left"
+                style={{ background: m.glow, width: '100%', opacity: 0.55 }}
+              />
+            </motion.div>
+          )
+        })}
+      </AnimatePresence>
+    </div>
+  )
+}
+
+// Helper local que respeta prefers-reduced-motion. No añadimos una lib
+// adicional — el CSS media query basta. Se memoiza con un único listener.
+function useReducedMotionCached() {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handler = (e) => setReduced(e.matches)
+    try { mq.addEventListener('change', handler) }
+    catch { mq.addListener(handler) } // Safari antiguos
+    return () => {
+      try { mq.removeEventListener('change', handler) }
+      catch { mq.removeListener(handler) }
+    }
+  }, [])
+  return reduced
+}
+
+//  - Resumen de lo que hizo el bot (qué conquistó / atacó / fortificó)
+// En total ~14 s para los 3 bots — Fran dijo "hazlos más lentos para
+// percatarme" así que cadencia cómoda > velocidad.
+function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
+  const turn = useTurnPoll()
+  const [playing, setPlaying] = useState(false)
+  const [step, setStep] = useState(0)
+  const [currentBot, setCurrentBot] = useState('')
+  const [lastSummary, setLastSummary] = useState(null)
+
+  const isMyTurn = turn && turn.current_player_id === myUserId
+
+  const run = useCallback(async () => {
+    if (playing) return
+    setPlaying(true); setStep(0); setLastSummary(null)
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms))
+    try {
+      // Max 5 iteraciones como red de seguridad por si el backend nunca
+      // devolviera el turno al usuario (no debería, pero vale más pecar).
+      for (let i = 0; i < 5; i++) {
+        const tRes = await api.get('/api/v1/turn/')
+        const curr = tRes.data
+        if (curr?.current_player_id === myUserId) break
+        const botId = curr.current_player_id
+        const botName = botId === 'demo-player-001' ? getNorteName() : (PLAYERS[botId]?.name || 'bot')
+        setCurrentBot(botName)
+        setStep(i + 1)
+        const simRes = await api.post('/api/v1/simulate_bots/run', { mode: 'step', actions_per_bot_turn: 15 })
+        // Emit overlay events PRIMERO — así la cámara vuela a la zona antes
+        // de que llegue el refreshData y repinte todo. Así vemos la
+        // acción "suceder".
+        const played = simRes?.data?.turns_played?.[0]
+        if (played?.actions) {
+          const evs = played.actions
+            .filter(a => a.action !== 'idle')
+            .map((a, idx) => ({
+              ...a, botName, bot: played.bot,
+              _key: `${Date.now()}-${i}-${idx}`,
+            }))
+          if (evs.length > 0) onBattleEvents?.(evs)
+        }
+        if (played?.summary) {
+          const s = played.summary
+          const parts = []
+          if (s.conquer) parts.push(`${s.conquer} conq.`)
+          if (s.attack)  parts.push(`${s.attack} ataq.`)
+          if (s.fortify) parts.push(`${s.fortify} fort.`)
+          setLastSummary({ bot: botName, text: parts.join(' · ') || 'sin acciones' })
+        }
+        // Damos tiempo al overlay para que termine las animaciones:
+        // ~250 ms por acción + 1.5 s de colchón. Con eso la cámara
+        // recorre toda la partida del bot sin sentirse atropellada.
+        const acts = (played?.actions || []).filter(a => a.action !== 'idle').length
+        const botDuration = Math.min(8000, Math.max(3500, acts * 550 + 1500))
+        await onRefresh?.()
+        await sleep(botDuration)
+      }
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn('[simulate bots]', e?.message || e)
+    } finally {
+      setPlaying(false); setStep(0); setCurrentBot(''); setLastSummary(null)
+      try { await onRefresh?.() } catch { /* ignore */ }
+    }
+  }, [playing, myUserId, onRefresh, onBattleEvents])
+
+  const runRef = useRef(run)
+  runRef.current = run
+  const playingRef = useRef(playing)
+  playingRef.current = playing
+
+  const prevIsMyTurnRef = useRef(null)
+  useEffect(() => {
+    const prev = prevIsMyTurnRef.current
+    prevIsMyTurnRef.current = isMyTurn
+    if (prev !== true || isMyTurn !== false) return
+    if (playingRef.current) return
+    const t = setTimeout(() => runRef.current(), 1200)
+    return () => clearTimeout(t)
+  }, [isMyTurn])
+
+  if (!turn) return null
+  const disabled = playing || isMyTurn
+  const showSummary = lastSummary && lastSummary.bot === currentBot
+  // Cuando es mi turno el bot-button es puro ruido (Terminar Turno ya vive al
+  // lado). Solo aparece mientras corren los bots o si el jugador tarda tanto
+  // que prefiere re-lanzarlos a mano — en ese estado damos el copy corto.
+  if (isMyTurn && !playing) return null
+  const label = playing
+    ? (showSummary
+        ? `✓ ${currentBot}: ${lastSummary.text} (${step}/3)`
+        : `Jugando ${currentBot}… (${step}/3)`)
+    : '🤖 Jugar turnos de bots'
+  return (
+    <button
+      type="button"
+      onClick={run}
+      disabled={disabled}
+      title={isMyTurn ? 'Termina tu turno primero para que jueguen los bots.' : 'Los bots juegan uno a uno hasta que vuelva tu turno.'}
+      className="px-4 py-2.5 rounded-full font-bold text-[11px] uppercase tracking-nike-wide
+                 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed
+                 flex items-center gap-2 border max-w-[420px] truncate"
+      style={{
+        background: disabled ? 'rgba(200,255,0,0.06)' : 'rgba(200,255,0,0.16)',
+        borderColor: 'rgba(200,255,0,0.45)',
+        color: '#c8ff00',
+        boxShadow: disabled ? 'none' : '0 0 14px rgba(200,255,0,0.25)',
+      }}
+    >
+      {label}
     </button>
   )
 }
@@ -3351,9 +3969,15 @@ function EnvironmentBanner() {
 // ─────────────────────────────────────────────────────────────
 // MAP VIEW with real GeoJSON — Phase 2 redesign
 // ─────────────────────────────────────────────────────────────
-function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = [], battles = [], wsStatus = 'idle', sendWs }) {
+function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = [], battles = [], battleHistory = [], wsStatus = 'idle', sendWs }) {
+  // `user` se usa para leer el balance (power_points) sin tener que pasarlo
+  // como prop. AuthContext es el source of truth y se mantiene fresco por
+  // refreshData en el padre.
+  const { user } = useAuth()
   const [selected, setSelected] = useState(null)
   const [actionPanel, setActionPanel] = useState(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [battleEvents, setBattleEvents] = useState([])
   const [mapRefreshKey, setMapRefreshKey] = useState(0)
   const [runMode, setRunMode] = useState(false)
   const [viewMode, setViewMode] = useState('control') // 'control' | 'pressure' | 'economy'
@@ -3366,7 +3990,8 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
   // NeonMap rellena este ref en su efecto de init.
   const mapActionsRef = useRef(null)
 
-  // Contadores del mapa (86 zonas totales en v3):
+  // Contadores del mapa (84 zonas jugables — 86 del geojson menos les Cases
+  // de Bàrcena y Mauella, que eran aisladas sin adyacencia):
   //   myZones    = las que posee este jugador (15 al empezar)
   //   enemyZones = las que poseen los otros 3 jugadores (45 al empezar)
   //   freeZones  = zonas sin dueño (26 libres para reclamar)
@@ -3375,20 +4000,118 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
   const enemyZones = conqueredZones - myZones
   const freeZones = zones.filter(z => !z.owner_clan_id).length
 
-  // Color del jugador actual (mismos mapping que el Lobby)
-  const PLAYER_COLORS = {
-    'demo-player-001': '#f43f5e',  // Norte (magenta)
-    'demo-player-002': '#facc15',  // Sur (lime)
-    'demo-player-003': '#06b6d4',  // Este (cyan)
-    'demo-player-004': '#a855f7',  // Oeste (purple)
-  }
-  const myColor = PLAYER_COLORS[currentUserId] || '#facc15'
+  // Color del jugador actual — fuente única en PLAYERS (módulo).
+  const myColor = PLAYERS[currentUserId]?.color || '#facc15'
+
+  // Grafo de adyacencia — se carga una única vez al montar MapView. Lo usamos
+  // para decidir si una zona libre puede ser conquistada por el jugador (sólo
+  // aparece el botón "¡Conquistar zona!" si la zona es vecina de alguna mía).
+  // Es inmutable a lo largo de la partida así que no hace falta refrescarlo.
+  const [adjacencyMap, setAdjacencyMap] = useState(null)
+  useEffect(() => {
+    let alive = true
+    api.get('/api/v1/zones/adjacency')
+      .then(r => { if (alive) setAdjacencyMap(r.data?.adjacency || {}) })
+      .catch(() => { /* sin adjacency el botón Conquistar simplemente no aparecerá — degradación segura */ })
+    return () => { alive = false }
+  }, [])
+
+  // Set de zone_ids propios: utilidad para O(1) lookup en la regla de adyacencia.
+  const myZoneIds = React.useMemo(() =>
+    new Set(zones.filter(z =>
+      z.owner_clan_id === currentUserId ||
+      (currentClanId && z.owner_clan_id === currentClanId)
+    ).map(z => z.id))
+  , [zones, currentUserId, currentClanId])
+
+  // ¿La zona seleccionada (si es libre) es adyacente a alguna zona mía?
+  const selectedIsConquistable = React.useMemo(() => {
+    if (!selected?.id || selected.owner_clan_id || !adjacencyMap) return false
+    const neighbors = adjacencyMap[selected.id] || []
+    return neighbors.some(nid => myZoneIds.has(nid))
+  }, [selected?.id, selected?.owner_clan_id, adjacencyMap, myZoneIds])
+
+  // BUG detectado en la auditoría: tras el turno de los bots el contador
+  // "Tuyas" bajaba pero el mapa seguía pintando las zonas con el color del
+  // dueño anterior. Causa: `refreshData()` refrescaba el array `zones` del
+  // padre, pero el GeoJSON interno de NeonMap sólo se re-colorea cuando
+  // `refreshKey` cambia. Bumpeamos el refreshKey cada vez que `zones`
+  // cambia de referencia → el mapa siempre está sincronizado con el HUD.
+  useEffect(() => {
+    if (!zones || zones.length === 0) return
+    setMapRefreshKey(k => k + 1)
+  }, [zones])
+
+  // Re-sincroniza la zona seleccionada con el estado fresco del servidor.
+  // BUG detectado jugando: el drawer inferior guarda un snapshot al hacer
+  // click y lo enseña sin refrescar. Tras desplegar 27 tropas el drawer
+  // seguía diciendo "2 tropas" aunque el backend ya tenía 29. Este efecto
+  // emparejá la `selected` con la última fila del array `zones` cada vez
+  // que `zones` cambia.
+  useEffect(() => {
+    if (!selected?.id || !zones || zones.length === 0) return
+    const fresh = zones.find(z => z.id === selected.id)
+    if (!fresh) return
+    const nextArmies = Number(fresh.total_armies ?? fresh.defense_level ?? 0)
+    const nextOwner  = fresh.owner_clan_id || ''
+    const isMine     = nextOwner && (nextOwner === currentUserId || nextOwner === currentClanId)
+    // Sólo disparamos setState si algo relevante cambió (evita re-renders en bucle).
+    if (
+      nextArmies === selected.total_armies &&
+      nextArmies === selected.defense_level &&
+      nextOwner === selected.owner_clan_id &&
+      !!isMine === !!selected.isMine
+    ) return
+    setSelected(s => s && ({
+      ...s,
+      total_armies: nextArmies,
+      defense_level: nextArmies,
+      owner_clan_id: nextOwner,
+      owner_clan_name: fresh.owner_clan_name || s.owner_clan_name || '',
+      isMine: !!isMine,
+    }))
+  }, [zones, selected?.id, currentUserId, currentClanId])
 
   const handleSuccess = () => {
     setActionPanel(null)
     setMapRefreshKey(k => k + 1)
     refreshData?.()
   }
+
+  // Atajos de teclado: Esc cierra el drawer/ActionPanel/historial. Solicitado
+  // en la auditoría UX: el mapa es táctil-first pero en escritorio esperas
+  // poder salir de un panel sin ir a buscar la X.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return
+      if (actionPanel) setActionPanel(null)
+      else if (selected) setSelected(null)
+      else if (showHistory) setShowHistory(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [actionPanel, selected, showHistory])
+
+  // Auto-recentrar el mapa en mis zonas cuando vuelve mi turno. Detectado en
+  // la auditoría: tras el ciclo de bots la cámara se quedaba pegada en la
+  // última zona que atacó el bot (p. ej. Malilla) y el jugador perdía
+  // contexto sobre dónde está jugando. En cuanto se detecta la transición
+  // "no era mi turno → ahora sí", volamos a mi bounding box.
+  const turnForMap = useTurnPoll()
+  const prevWasMineRef = useRef(null)
+  useEffect(() => {
+    const mine = !!turnForMap && turnForMap.current_player_id === currentUserId
+    const wasMine = prevWasMineRef.current
+    prevWasMineRef.current = mine
+    // Solo al transicionar false → true, y nunca al montar (prev=null).
+    if (wasMine !== false || mine !== true) return
+    // Pequeño retraso: el overlay de batalla acaba de soltar sus fly-to
+    // escalonados; esperamos a que termine el último antes de recentrar.
+    const t = setTimeout(() => {
+      try { mapActionsRef.current?.centerOnMyZones?.() } catch {}
+    }, 900)
+    return () => clearTimeout(t)
+  }, [turnForMap, currentUserId])
 
   const handleConquer = async () => {
     if (!selected) return
@@ -3600,6 +4323,27 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
           <TurnBanner myUserId={currentUserId} />
           <EnvironmentBanner />
           <EndTurnButton myUserId={currentUserId} />
+          <SimulateBotsButton myUserId={currentUserId} onRefresh={refreshData} onBattleEvents={setBattleEvents} />
+
+          {/* Botón historial de batallas */}
+          <motion.button
+            whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+            onClick={() => setShowHistory(h => !h)}
+            className={`flex items-center gap-2 px-4 py-3 rounded-2xl backdrop-blur-xl border font-bold text-sm transition-colors ${
+              showHistory
+                ? 'border-yellow-400/60 bg-yellow-400/15 text-yellow-300'
+                : 'border-white/10 bg-black/70 text-white/60 hover:text-white/90'
+            }`}
+          >
+            <ScrollText className="w-4 h-4" />
+            Historial
+            {battleHistory.length > 0 && (
+              <span className="text-[10px] font-black px-1.5 py-0.5 rounded-full"
+                style={{ background: 'rgba(200,255,0,0.2)', color: '#c8ff00' }}>
+                {battleHistory.length}
+              </span>
+            )}
+          </motion.button>
         </div>
 
         {/* Legend + WS indicator.
@@ -3667,39 +4411,74 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
               </div>
             </div>
 
-            {/* Conquistar — shown only for free zones when user is in a clan */}
-            {!selected.owner_clan_id && currentClanId && (
+            {/* Conquistar — sólo aparece para zonas libres que sean adyacentes
+                a alguna zona propia. Cuesta 1 tropa: si no tienes disponibles
+                el botón queda deshabilitado con un tooltip explicativo. */}
+            {!selected.owner_clan_id && selectedIsConquistable && (() => {
+              const canPay = (user?.power_points ?? 0) >= 1
+              return (
+                <div className="px-6 pb-4">
+                  <motion.button
+                    whileHover={canPay ? { scale: 1.02 } : {}}
+                    whileTap={canPay ? { scale: 0.97 } : {}}
+                    onClick={canPay ? handleConquer : undefined}
+                    disabled={conquering || !canPay}
+                    title={canPay
+                      ? 'Reclama esta zona (cuesta 1 tropa de las disponibles)'
+                      : 'Necesitas al menos 1 tropa disponible. Camina para ganarlas.'}
+                    className="w-full py-4 rounded-2xl font-display font-extrabold text-lg flex items-center justify-center gap-3 border transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    style={{
+                      background: conquering ? 'rgba(202,255,51,0.10)' : 'linear-gradient(135deg,rgba(202,255,51,0.25),rgba(202,255,51,0.10))',
+                      borderColor: '#facc1560',
+                      color: '#facc15',
+                      boxShadow: conquering || !canPay ? 'none' : '0 0 24px rgba(202,255,51,0.20)',
+                    }}>
+                    <Crown className="w-5 h-5" />
+                    {conquering
+                      ? 'Conquistando…'
+                      : canPay ? '¡Conquistar zona! (1 tropa)' : 'Sin tropas disponibles'}
+                  </motion.button>
+                </div>
+              )
+            })()}
+            {!selected.owner_clan_id && !selectedIsConquistable && adjacencyMap && (
               <div className="px-6 pb-4">
-                <motion.button
-                  whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
-                  onClick={handleConquer}
-                  disabled={conquering}
-                  className="w-full py-4 rounded-2xl font-display font-extrabold text-lg flex items-center justify-center gap-3 border transition disabled:opacity-50"
-                  style={{
-                    background: conquering ? 'rgba(202,255,51,0.10)' : 'linear-gradient(135deg,rgba(202,255,51,0.25),rgba(202,255,51,0.10))',
-                    borderColor: '#facc1560',
-                    color: '#facc15',
-                    boxShadow: conquering ? 'none' : '0 0 24px rgba(202,255,51,0.20)',
-                  }}>
-                  <Crown className="w-5 h-5" />
-                  {conquering ? 'Conquistando…' : '¡Conquistar zona!'}
-                </motion.button>
+                <div className="px-4 py-3 rounded-xl border text-sm leading-snug"
+                  style={{ background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.55)' }}>
+                  Esta zona libre no es adyacente a ningún territorio tuyo. Conquista primero un barrio vecino para llegar.
+                </div>
               </div>
             )}
 
-            {/* Action buttons */}
+            {/* Action buttons
+                Reglas por zona:
+                  - Mía       → Desplegar ✓, Atacar ✗, Fortificar ✓
+                  - Rival     → Desplegar ✗, Atacar ✓, Fortificar ✗
+                  - Libre     → Desplegar ✗, Atacar ✗, Fortificar ✗ (usa "¡Conquistar zona!")
+                Desplegar sólo tiene sentido sobre territorio propio. */}
             <div className="px-6 pb-8 grid grid-cols-3 gap-3">
               {[
-                { key: 'deploy',  label: 'Desplegar', Icon: Send,   color: '#facc15', bg: 'rgba(202,255,51,0.10)',  disabled: false },
-                { key: 'attack',  label: 'Atacar',    Icon: Swords, color: '#f43f5e', bg: 'rgba(255,45,146,0.10)', disabled: selected.isMine },
-                { key: 'fortify', label: 'Fortificar', Icon: Shield, color: '#06b6d4', bg: 'rgba(0,240,255,0.10)',  disabled: !selected.isMine },
-              ].map(({ key, label, Icon, color, bg, disabled }) => (
+                { key: 'deploy',  label: 'Desplegar', Icon: Send,   color: '#facc15', bg: 'rgba(202,255,51,0.10)',
+                  disabled: !selected.isMine,
+                  tip: !selected.isMine
+                    ? (selected.owner_clan_id ? 'Solo puedes desplegar en zonas propias' : 'Primero conquista esta zona libre')
+                    : 'Envía tropas a esta zona' },
+                { key: 'attack',  label: 'Atacar',    Icon: Swords, color: '#f43f5e', bg: 'rgba(255,45,146,0.10)',
+                  disabled: selected.isMine || !selected.owner_clan_id,
+                  tip: selected.isMine ? 'No puedes atacar tus propias zonas'
+                     : !selected.owner_clan_id ? 'Zona libre — usa Conquistar' : 'Lanza una ofensiva' },
+                { key: 'fortify', label: 'Fortificar', Icon: Shield, color: '#06b6d4', bg: 'rgba(0,240,255,0.10)',
+                  disabled: !selected.isMine,
+                  tip: !selected.isMine ? 'Solo puedes mover tropas desde zonas propias' : 'Mueve tropas a otro territorio tuyo' },
+              ].map(({ key, label, Icon, color, bg, disabled, tip }) => (
                 <motion.button key={key}
                   whileHover={!disabled ? { scale: 1.04 } : {}}
                   whileTap={!disabled ? { scale: 0.96 } : {}}
                   onClick={() => !disabled && setActionPanel(key)}
                   disabled={disabled}
-                  className="py-5 rounded-2xl flex flex-col items-center gap-2 border transition disabled:opacity-20"
+                  title={tip}
+                  aria-label={`${label}: ${tip}`}
+                  className="py-5 rounded-2xl flex flex-col items-center gap-2 border transition disabled:opacity-20 disabled:cursor-not-allowed"
                   style={{ background: bg, borderColor: disabled ? 'rgba(255,255,255,0.08)' : `${color}55`, color: disabled ? 'rgba(255,255,255,0.25)' : color,
                     boxShadow: disabled ? 'none' : `0 4px 20px ${color}22` }}>
                   <Icon className="w-6 h-6" />
@@ -3736,6 +4515,86 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
       {/* Botón "Centrar en mis zonas" — React overlay posicionado fuera del
           HUD (right-4 top-24) para que nunca lo tape el HUD ni se pierda al
           hacer responsive. Llama a la acción imperativa que expone NeonMap. */}
+      {/* ── Panel historial de batallas ── */}
+      <AnimatePresence>
+        {showHistory && (
+          <motion.div
+            key="history-panel"
+            initial={{ opacity: 0, x: 40 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 40 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+            className="absolute top-20 right-4 z-40 w-80 max-h-[70vh] flex flex-col rounded-2xl border overflow-hidden"
+            style={{ background: 'rgba(6,7,16,0.92)', borderColor: 'rgba(200,255,0,0.2)', backdropFilter: 'blur(20px)' }}
+          >
+            {/* Header */}
+            <div className="flex items-center gap-2 px-4 py-3 border-b" style={{ borderColor: 'rgba(200,255,0,0.15)' }}>
+              <ScrollText className="w-4 h-4 flex-shrink-0" style={{ color: '#c8ff00' }} />
+              <span className="font-display font-bold text-white text-xs uppercase tracking-widest flex-1">
+                Historial de Batallas
+              </span>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full mr-1"
+                style={{ background: 'rgba(200,255,0,0.15)', color: '#c8ff00' }}>
+                {battleHistory.length}
+              </span>
+              <button onClick={() => setShowHistory(false)}
+                className="text-white/40 hover:text-white transition">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Lista */}
+            <div className="overflow-y-auto flex-1 px-3 py-3 space-y-2">
+              {battleHistory.length === 0 ? (
+                <div className="text-xs text-white/30 text-center py-6">Sin batallas registradas aún</div>
+              ) : battleHistory.map(b => {
+                const isAttacker = b.attacker_clan_id === currentUserId || b.attacker_clan_id === currentClanId
+                const won = (isAttacker && b.result === 'attacker_wins') || (!isAttacker && b.result === 'defender_wins')
+                const ongoing = b.result === 'ongoing'
+                const label = ongoing ? '⚔ En curso' : won ? '✓ Victoria' : '✗ Derrota'
+                const labelColor = won ? '#c8ff00' : ongoing ? '#c8ff00' : 'rgba(255,255,255,0.4)'
+                const date = b.started_at
+                  ? new Date(b.started_at).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                  : ''
+                return (
+                  <div key={b.id}
+                    className={`rounded-xl px-3 py-2.5 border transition ${!won && !ongoing ? 'opacity-55' : ''}`}
+                    style={{ background: 'rgba(200,255,0,0.03)', borderColor: 'rgba(200,255,0,0.12)' }}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest flex-shrink-0"
+                        style={{ color: labelColor }}>{label}</span>
+                      <span className="flex-1 text-xs text-white truncate font-medium">
+                        {b.zone_name || 'Zona desconocida'}
+                      </span>
+                      <span className="text-[9px] text-white/30 flex-shrink-0">{date}</span>
+                    </div>
+                    {b.attacker_rolls?.length > 0 && (
+                      <div className="mt-1.5 flex items-center gap-2 text-[10px]">
+                        <span className="text-white/50">Atk</span>
+                        <span className="font-bold" style={{ color: '#c8ff00' }}>
+                          [{b.attacker_rolls.join(', ')}]
+                        </span>
+                        <span className="text-white/30">vs</span>
+                        <span className="text-white/50">Def</span>
+                        <span className="font-bold text-white/70">
+                          [{(b.defender_rolls || []).join(', ')}]
+                        </span>
+                        <span className="ml-auto text-[9px]" style={{ color: won ? '#c8ff00' : 'rgba(255,255,255,0.35)' }}>
+                          {won ? `−${b.attacker_losses ?? 0} nuestros` : `−${b.attacker_losses ?? 0} nuestros`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Bot action overlay ── */}
+      <BattleEventOverlay events={battleEvents} mapActionsRef={mapActionsRef} myUserId={currentUserId} />
+
       <motion.button
         type="button"
         whileHover={{ scale: 1.08 }}
@@ -3844,6 +4703,19 @@ export default function UrbanPacer() {
     setTimeout(() => setToasts(ts => ts.filter(t => t.id !== id)), ttl)
   }, [])
 
+  // Debounced refresher for WS-triggered invalidations: durante la
+  // simulación de bots el servidor emite hasta 15 eventos zone_updated
+  // seguidos y antes cada uno disparaba 5 fetch en paralelo. Ahora los
+  // colapsamos en una única llamada 800 ms después del último evento.
+  const refreshDebounceRef = useRef(null)
+  const requestRefresh = useCallback(() => {
+    if (refreshDebounceRef.current) clearTimeout(refreshDebounceRef.current)
+    refreshDebounceRef.current = setTimeout(() => {
+      refreshDebounceRef.current = null
+      refreshDataRef.current?.()
+    }, 800)
+  }, [])
+
   // refreshData declared early so WS handler can reference it
   const refreshDataRef = useRef(null)
   const refreshData = useCallback(async () => {
@@ -3866,13 +4738,12 @@ export default function UrbanPacer() {
       if (me.data) setUser(me.data)
       if (Array.isArray(lb.data)) setLeaderboard(lb.data)
 
-      // Missions and battle history depend on clan — fetch after me resolves
-      const clanId = me.data?.clan_id
+      // Missions + battle history — en este juego clan_id es siempre null
+      // (los 4 comandantes actúan como clan individual usando su propio id).
+      // Por eso NO gateamos por clan_id; el backend ya filtra por el token.
       const [mRes, bhRes] = await Promise.all([
         api.get('/api/v1/missions/').catch(() => ({ data: [] })),
-        clanId
-          ? api.get('/api/v1/battles/history').catch(() => ({ data: [] }))
-          : Promise.resolve({ data: [] }),
+        api.get('/api/v1/battles/history').catch(() => ({ data: [] })),
       ])
       if (Array.isArray(mRes.data)) setMissions(mRes.data)
       if (Array.isArray(bhRes.data)) setBattleHistory(bhRes.data)
@@ -3884,16 +4755,37 @@ export default function UrbanPacer() {
   }, [token, setUser, pushToast])
   useEffect(() => { refreshDataRef.current = refreshData }, [refreshData])
 
+  // Refresca el historial de batallas cada 15 s sin relanzar el fetch completo.
+  // BUG detectado en la auditoría: antes había un early-return si
+  // `user?.clan_id` era falsy — pero en este juego los 4 comandantes NO
+  // tienen clan asignado (clan_id siempre es null, el user.id actúa como
+  // clan en toda la lógica de zonas). Ese guard hacía que el historial
+  // NUNCA se poblase aunque el backend tuviera batallas. Ahora llamamos
+  // siempre que haya token.
+  useEffect(() => {
+    if (!token) return
+    const poll = async () => {
+      try {
+        const r = await api.get('/api/v1/battles/history')
+        if (Array.isArray(r.data)) setBattleHistory(r.data)
+      } catch {}
+    }
+    poll() // primer fetch inmediato al montar
+    const id = setInterval(poll, 15000)
+    return () => clearInterval(id)
+  }, [token])
+
   // #1 — WebSocket cableado como invalidador del estado global
   const handleWsMessage = useCallback((msg) => {
     if (!msg?.event) return
     switch (msg.event) {
+      case 'game_state_update':
       case 'zone_updated':
       case 'battle_started':
       case 'battle_resolved':
       case 'armies_placed':
       case 'armies_fortified':
-        refreshDataRef.current?.()
+        requestRefresh()
         break
       case 'location_ack': {
         const z = msg.zone
@@ -3912,7 +4804,7 @@ export default function UrbanPacer() {
         // unhandled — silencio controlado
         break
     }
-  }, [pushToast])
+  }, [pushToast, requestRefresh])
   const { status: wsStatus, sendMessage: sendWs } = useWebSocket(user?.id, handleWsMessage)
 
   useEffect(() => {
@@ -4011,6 +4903,7 @@ export default function UrbanPacer() {
             refreshData={refreshData}
             zones={zones}
             battles={battles}
+            battleHistory={battleHistory}
             wsStatus={wsStatus}
             sendWs={sendWs}
           />

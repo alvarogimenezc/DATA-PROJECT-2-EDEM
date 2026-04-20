@@ -13,7 +13,7 @@
       "email": "norte@cloudrisk.app",
       "password": "demo1234",
       "clan_color": "#ff2d92",
-      "spawn_zone": "zona-borbot",
+      "spawn_zone": "zona-borboto",
       "total_steps": 15420,
       "armies": 280,
       "gold": 640,
@@ -45,7 +45,7 @@
       "email": "este@cloudrisk.app",
       "password": "demo1234",
       "clan_color": "#00f0ff",
-      "spawn_zone": "zona-malva-rosa",
+      "spawn_zone": "zona-la-malvarosa",
       "total_steps": 18900,
       "armies": 340,
       "gold": 820,
@@ -61,7 +61,7 @@
       "email": "oeste@cloudrisk.app",
       "password": "demo1234",
       "clan_color": "#a855f7",
-      "spawn_zone": "zona-benimàmet",
+      "spawn_zone": "zona-benimamet",
       "total_steps": 10240,
       "armies": 190,
       "gold": 360,
@@ -77,7 +77,7 @@
     "demo-player-001": {
       "color": "#ff2d92",
       "zones": [
-        "zona-borbot",
+        "zona-borboto",
         "zona-benicalap",
         "zona-benimaclet",
         "zona-torrefiel",
@@ -96,8 +96,8 @@
         "zona-pinedo",
         "zona-natzaret",
         "zona-la-punta",
-        "zona-el-castellar",
-        "zona-el-forn-d-alcedo",
+        "zona-el-castellar-loliveral",
+        "zona-el-forn-dalcedo",
         "zona-la-torre",
         "zona-faitanar",
         "zona-sant-marcelli"
@@ -107,32 +107,31 @@
     "demo-player-003": {
       "color": "#00f0ff",
       "zones": [
-        "zona-la-malva-rosa",
-        "zona-el-cabanyal",
+        "zona-la-malvarosa",
+        "zona-el-cabanyal-el-canyamelar",
         "zona-el-grau",
-        "zona-natzaret-2",
+        "zona-la-creu-del-grau",
         "zona-aiora",
-        "zona-penya-roja",
+        "zona-penyaroja",
         "zona-cami-fondo",
         "zona-albors",
-        "zona-l-amistat",
+        "zona-lamistat",
         "zona-mestalla",
         "zona-ciutat-jardi",
-        "zona-l-illa-perduda"
+        "zona-lilla-perduda"
       ],
       "armies_per_zone": 28
     },
     "demo-player-004": {
       "color": "#a855f7",
       "zones": [
-        "zona-benimàmet",
+        "zona-benimamet",
         "zona-campanar",
         "zona-les-tendetes",
         "zona-el-calvari",
         "zona-sant-pau",
         "zona-nou-moles",
-        "zona-la-fontsanta",
-        "zona-mauella"
+        "zona-la-fontsanta"
       ],
       "armies_per_zone": 23
     }
@@ -178,7 +177,7 @@
       {
         "ts": "2026-04-14T11:00:00Z",
         "source": "air_quality",
-        "zone_id": "zona-cabanyal",
+        "zone_id": "zona-el-cabanyal-el-canyamelar",
         "aqi": 2,
         "pm25": 12.4,
         "pm10": 24.8,
@@ -187,7 +186,7 @@
       {
         "ts": "2026-04-14T10:30:00Z",
         "source": "air_quality",
-        "zone_id": "zona-borbot",
+        "zone_id": "zona-borboto",
         "aqi": 4,
         "pm25": 35.2,
         "pm10": 72.1,
@@ -205,7 +204,7 @@
       {
         "ts": "2026-04-14T09:30:00Z",
         "source": "weather",
-        "zone_id": "zona-malva-rosa",
+        "zone_id": "zona-la-malvarosa",
         "temperature_c": 19.8,
         "humidity_pct": 74,
         "wind_kmh": 22,

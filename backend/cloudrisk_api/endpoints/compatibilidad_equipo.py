@@ -161,6 +161,22 @@ def place_armies(
     if not zone:
         raise HTTPException(status_code=404, detail=f"location {action.location_id} not found")
 
+    # Regla: solo puedes desplegar en zonas propias. Este endpoint antes
+    # sobrescribía `owner_clan_id = player_id`, así que un curl contra
+    # /actions/place sobre una zona libre o rival la convertía gratis en
+    # tuya — salteándose conquist + ataque. Ahora rechazamos ambos casos.
+    zone_owner = zone.get("owner_clan_id")
+    if not zone_owner:
+        raise HTTPException(
+            status_code=400,
+            detail="Esta zona es libre — usa /zones/{id}/conquer para reclamarla antes de desplegar.",
+        )
+    if zone_owner != player_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo puedes desplegar en zonas propias. Esta zona pertenece a otro jugador.",
+        )
+
     current = int(user.get("power_points") or 0)
     if current < armies_to_place:
         raise HTTPException(
@@ -175,9 +191,9 @@ def place_armies(
     effective = max(1, round(armies_to_place * snap.combined))
 
     new_defense = min(int(zone.get("defense_level") or 0) + effective, MAX_ZONE_DEFENSE)
+    # owner_clan_id NO se toca — el guard anterior garantiza que ya es player_id.
     zonas_repo.update_zone(action.location_id, {
         "defense_level": new_defense,
-        "owner_clan_id": player_id,
     })
     new_power = max(0, current - armies_to_place)
     usuarios_repo.update_user(player_id, {"power_points": new_power})

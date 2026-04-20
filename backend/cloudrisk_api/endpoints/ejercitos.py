@@ -57,10 +57,29 @@ def get_balance(current_user: dict = Depends(get_current_user)):
 
 @router.post("/place")
 def place_armies(data: PlaceRequest, current_user: dict = Depends(get_current_user)):
-    """Despliega tropas en una zona."""
+    """Despliega tropas en una zona.
+
+    Regla: solo puedes desplegar en zonas propias. Zona libre → conquista
+    primero; zona rival → atacar. Antes este endpoint sobrescribía
+    `owner_clan_id` con el usuario, convirtiéndose en un "conquist gratis"
+    si llamabas con curl/Postman sin pasar por el frontend.
+    """
     zone = zonas_repo.get_zone_by_id(data.location_id)
     if not zone:
         raise HTTPException(status_code=404, detail="Zona no encontrada")
+
+    user_owner = current_user.get("clan_id") or current_user["id"]
+    zone_owner = zone.get("owner_clan_id")
+    if not zone_owner:
+        raise HTTPException(
+            status_code=400,
+            detail="Esta zona es libre — usa /zones/{id}/conquer para reclamarla antes de desplegar.",
+        )
+    if zone_owner != user_owner:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo puedes desplegar en zonas propias. Esta zona pertenece a otro jugador.",
+        )
 
     user_power = current_user.get("power_points", 0)
     if data.amount > user_power:
@@ -73,12 +92,12 @@ def place_armies(data: PlaceRequest, current_user: dict = Depends(get_current_us
     snap = multipliers.current()
     effective_amount = max(1, round(data.amount * snap.combined))
 
-    # Actualiza la defensa de la zona y el poder del usuario
+    # Actualiza la defensa de la zona. `owner_clan_id` ya no se toca: se
+    # respeta el propietario vigente (hemos verificado arriba que es el caller).
     current_defense = zone.get("defense_level", 0) or 0
     new_defense = min(current_defense + effective_amount, 40)
     zonas_repo.update_zone(data.location_id, {
         "defense_level": new_defense,
-        "owner_clan_id": current_user.get("clan_id") or current_user["id"],
     })
 
     # El usuario paga la cantidad BASE (data.amount); el multiplicador le da

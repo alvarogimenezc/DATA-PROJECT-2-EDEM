@@ -12,8 +12,10 @@ Algoritmo:
        compartido, no solo un corner casual).
     3. Guardar como dict {zone_id: frozenset(neighbor_ids)}.
 
-En Valencia (86 barrios del geojson limpio) esto da ~5-7 vecinos promedio
-por barrio, que es lo esperado para un teselado geográfico.
+En Valencia (84 barrios jugables del geojson — se excluyeron les Cases de
+Bàrcena y Mauella por estar aisladas y no tener adyacencia con el resto)
+esto da ~5-7 vecinos promedio por barrio, que es lo esperado para un
+teselado geográfico.
 
 EDEM. Master Big Data & Cloud 2025/2026
 """

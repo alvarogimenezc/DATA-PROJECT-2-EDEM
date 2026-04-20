@@ -72,6 +72,37 @@ def conquer_zone(zone_id: str, current_user: dict = Depends(get_current_user)):
             status_code=400,
             detail="This zone is enemy territory — use /attack instead.",
         )
+    # Regla Risk: reclamar un territorio libre requiere ser vecino. Evita que
+    # un jugador reclame zonas del otro lado del mapa sin haber expandido
+    # hacia allí. El frontend también oculta el botón cuando no hay
+    # adyacencia, pero la defensa aquí protege contra llamadas directas.
+    user_owner = current_user.get("clan_id") or current_user["id"]
+    adj_map = adjacency.get_adjacency()
+    neighbors = adj_map.get(zone_id, frozenset())
+    if neighbors:
+        owns_neighbor = any(
+            (z := zonas_repo.get_zone_by_id(nid)) and (z.get("owner_clan_id") == user_owner)
+            for nid in neighbors
+        )
+        if not owns_neighbor:
+            raise HTTPException(
+                status_code=400,
+                detail="No eres adyacente a esta zona libre. Conquista primero un barrio vecino.",
+            )
+    # Si la zona no tiene entrada en adj_map (caso extremo: zona aislada sin
+    # geojson), dejamos pasar para no bloquear partidas — la excepción aquí
+    # es peor que la regla suavizada.
+
+    # Regla: reclamar una zona libre cuesta 1 tropa, que se deposita como
+    # guarnición. Si el jugador no tiene al menos 1 tropa disponible, no se
+    # puede conquistar todavía (debe caminar / pedir refuerzos primero).
+    user_power = int(current_user.get("power_points") or 0)
+    if user_power < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Necesitas al menos 1 tropa disponible para conquistar. Camina más para ganar tropas.",
+        )
+
     # Atomic claim. Returns False if someone else claimed it between our
     # read above and the transaction (narrow race window, but possible).
     claimed = zonas_repo.conquer_zone_atomic(
@@ -84,7 +115,28 @@ def conquer_zone(zone_id: str, current_user: dict = Depends(get_current_user)):
             status_code=409,
             detail="Zone was claimed by another player while you were acting",
         )
-    return {"message": f"Zone '{zone['name']}' conquered!", "zone_id": zone_id}
+
+    # Post-claim: depositamos 1 tropa en la zona y descontamos 1 del pool del
+    # jugador. No son estrictamente atómicos con el conquer, pero la ventana
+    # es mínima y en el peor caso (desconexión entre las dos writes) quedas
+    # con la zona a 0 defensas — escenario benigno: siempre puedes Desplegar
+    # luego para reforzarla.
+    try:
+        zonas_repo.update_zone(zone_id, {"defense_level": 1})
+    except Exception:
+        pass
+    try:
+        usuarios_repo.update_user(current_user["id"], {"power_points": user_power - 1})
+    except Exception:
+        pass
+
+    return {
+        "message": f"Zone '{zone['name']}' conquered! +1 tropa desplegada.",
+        "zone_id": zone_id,
+        "new_defense": 1,
+        "armies_spent": 1,
+        "armies_remaining": max(0, user_power - 1),
+    }
 
 
 class AttackRequest(BaseModel):
