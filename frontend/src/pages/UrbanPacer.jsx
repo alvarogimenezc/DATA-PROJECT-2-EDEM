@@ -1043,6 +1043,9 @@ const NEON_DARK_STYLE = {
 
 // Robust GeoJSON loader: tolerates 404 HTML, bad content-type, empty features
 // B-1: acepta AbortSignal para cancelar el fetch si el componente se desmonta
+// Nota: nginx en Cloud Run sirve .geojson como application/octet-stream (no
+// tiene mapping MIME para esa extensión). No filtramos por Content-Type —
+// si r.json() parsea OK y hay features, damos por bueno el archivo.
 async function loadValenciaGeoJSON(signal) {
   const paths = ['/valencia_districts.geojson', '/valencia_original_57.geojson']
   for (const p of paths) {
@@ -1052,8 +1055,6 @@ async function loadValenciaGeoJSON(signal) {
         signal,
       })
       if (!r.ok) continue
-      const ct = r.headers.get('content-type') || ''
-      if (!ct.includes('json') && !ct.includes('geo+json')) continue
       const data = await r.json()
       if (data?.features?.length) return data
     } catch (e) {
