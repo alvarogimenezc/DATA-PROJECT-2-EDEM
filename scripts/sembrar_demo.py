@@ -218,11 +218,15 @@ def seed_firestore(project: str, state: dict, zones: list[dict], dry_run: bool) 
     except ImportError:
         sys.exit("[demo] google-cloud-firestore not installed. Run: pip install google-cloud-firestore passlib[bcrypt]")
     try:
-        from passlib.context import CryptContext
+        import bcrypt as _bcrypt
     except ImportError:
-        sys.exit("[demo] passlib not installed. Run: pip install passlib[bcrypt]")
+        sys.exit("[demo] bcrypt not installed. Run: pip install bcrypt")
 
-    pwd = CryptContext(schemes=["bcrypt"], deprecated="auto")
+    class _BcryptWrapper:
+        def hash(self, password: str) -> str:
+            return _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+
+    pwd = _BcryptWrapper()
     db = firestore.Client(project=project)
     now = datetime.now(timezone.utc)
 

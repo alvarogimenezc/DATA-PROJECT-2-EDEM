@@ -6,11 +6,9 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime
-from passlib.context import CryptContext
+import bcrypt
 
 from cloudrisk_api.configuracion import settings
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 COLLECTION = settings.FIRESTORE_COLLECTION_USERS
 USE_LOCAL = os.environ.get("USE_LOCAL_STORE", "0") == "1"
 
@@ -30,7 +28,7 @@ def create_user(name: str, email: str, password: str) -> dict:
         user_id = str(uuid.uuid4())
         user_data = {
             "id": user_id, "name": name, "email": email,
-            "hashed_password": pwd_context.hash(password),
+            "hashed_password": bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(),
             "clan_id": None, "steps_total": 0, "power_points": 0,
             "gold": 0, "level": 1, "created_at": datetime.utcnow().isoformat(),
         }
@@ -46,7 +44,7 @@ def create_user(name: str, email: str, password: str) -> dict:
         # FastAPI can't JSON-serialize that object; store a concrete datetime instead.
         user_data = {
             "id": user_id, "name": name, "email": email,
-            "hashed_password": pwd_context.hash(password),
+            "hashed_password": bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(),
             "clan_id": None, "steps_total": 0, "power_points": 0,
             "gold": 0, "level": 1, "created_at": firestore.SERVER_TIMESTAMP,
         }
@@ -91,7 +89,7 @@ def list_users_by_clan(clan_id: str) -> list[dict]:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
 def list_users_top(limit: int = 10) -> list[dict]:

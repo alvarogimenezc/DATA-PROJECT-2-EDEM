@@ -38,7 +38,7 @@ resource "null_resource" "image_api" {
   }
 
   provisioner "local-exec" {
-    command     = "docker build -t ${local.registry}/api:latest ${local.repo_root}/backend && docker push ${local.registry}/api:latest"
+    command     = "docker buildx build --platform linux/amd64 --provenance=false --push -t ${local.registry}/api:latest ${local.repo_root}/backend"
     interpreter = ["bash", "-c"]
   }
 
@@ -56,7 +56,7 @@ resource "null_resource" "image_frontend" {
   }
 
   provisioner "local-exec" {
-    command     = "docker buildx build --platform linux/amd64 --provenance=false --push --build-arg VITE_API_URL=${google_cloud_run_v2_service.api.uri} -t ${local.registry}/frontend:latest ${local.repo_root}/frontend"
+    command     = "docker buildx build --platform linux/amd64 --provenance=false --push -t ${local.registry}/frontend:latest ${local.repo_root}/frontend"
     interpreter = ["bash", "-c"]
   }
 
@@ -78,7 +78,7 @@ resource "null_resource" "image_air_ingestor" {
   }
 
   provisioner "local-exec" {
-    command     = "docker build -f ${local.repo_root}/weather_airq/dockerfile --target air -t ${local.registry}/air-ingestor:latest ${local.repo_root}/weather_airq && docker push ${local.registry}/air-ingestor:latest"
+    command     = "docker buildx build --platform linux/amd64 --provenance=false --push -f ${local.repo_root}/weather_airq/dockerfile --target air -t ${local.registry}/air-ingestor:latest ${local.repo_root}/weather_airq"
     interpreter = ["bash", "-c"]
   }
 
@@ -95,7 +95,7 @@ resource "null_resource" "image_weather_ingestor" {
   }
 
   provisioner "local-exec" {
-    command     = "docker build -f ${local.repo_root}/weather_airq/dockerfile --target weather -t ${local.registry}/weather-ingestor:latest ${local.repo_root}/weather_airq && docker push ${local.registry}/weather-ingestor:latest"
+    command     = "docker buildx build --platform linux/amd64 --provenance=false --push -f ${local.repo_root}/weather_airq/dockerfile --target weather -t ${local.registry}/weather-ingestor:latest ${local.repo_root}/weather_airq"
     interpreter = ["bash", "-c"]
   }
 
@@ -112,7 +112,7 @@ resource "null_resource" "image_walker" {
   }
 
   provisioner "local-exec" {
-    command     = "docker build -t ${local.registry}/walker:latest ${local.repo_root}/data_generator && docker push ${local.registry}/walker:latest"
+    command     = "docker buildx build --platform linux/amd64 --provenance=false --push -t ${local.registry}/walker:latest ${local.repo_root}/data_generator"
     interpreter = ["bash", "-c"]
   }
 
@@ -129,7 +129,7 @@ resource "null_resource" "image_steps_ingestor" {
   }
 
   provisioner "local-exec" {
-    command     = "docker build -t ${local.registry}/steps-ingestor:latest ${local.repo_root}/steps_ingestor && docker push ${local.registry}/steps-ingestor:latest"
+    command     = "docker buildx build --platform linux/amd64 --provenance=false --push -t ${local.registry}/steps-ingestor:latest ${local.repo_root}/steps_ingestor"
     interpreter = ["bash", "-c"]
   }
 
@@ -152,7 +152,7 @@ resource "null_resource" "dataflow_flex_template" {
 
   provisioner "local-exec" {
     command     = <<-EOT
-      gcloud dataflow flex-template build \
+      DOCKER_DEFAULT_PLATFORM=linux/amd64 gcloud dataflow flex-template build \
         "gs://${google_storage_bucket.dataflow.name}/templates/cloudrisk-unified.json" \
         --image-gcr-path "${local.registry}/dataflow-unified:latest" \
         --sdk-language=PYTHON \

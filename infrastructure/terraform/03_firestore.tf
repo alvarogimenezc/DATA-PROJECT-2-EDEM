@@ -32,7 +32,7 @@ resource "google_firestore_database" "cloudrisk" {
   # En produccion real conviene "DELETE_PROTECTION_ENABLED" para evitar
   # borrados accidentales, pero entonces `terraform destroy` falla con
   # "cannot delete database ... delete_protection_state is ENABLED" y
-  # deja el ciclo apply→destroy roto. Lo dejamos DISABLED para que el
+  # deja el ciclo apply->destroy roto. Lo dejamos DISABLED para que el
   # ejercicio sea reproducible; el backend normal de Firestore ya tiene
   # PITR activo como red de seguridad.
   delete_protection_state = "DELETE_PROTECTION_DISABLED"

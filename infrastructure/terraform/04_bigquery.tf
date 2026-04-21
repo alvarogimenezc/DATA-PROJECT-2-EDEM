@@ -59,7 +59,7 @@ resource "google_bigquery_table" "environmental_factors" {
   # apply previo que lo ponga en false: Terraform llama a BQ con el flag en
   # true y BQ responde "cannot destroy ... without setting deletion_protection
   # =false and running terraform apply". Como queremos que el ciclo
-  # apply→destroy sea limpio, lo dejamos en false; el dataset padre tiene
+  # apply->destroy sea limpio, lo dejamos en false; el dataset padre tiene
   # `delete_contents_on_destroy = false` como red de seguridad.
   deletion_protection = false
 
