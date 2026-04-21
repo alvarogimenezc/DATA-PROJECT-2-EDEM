@@ -4672,7 +4672,7 @@ function ToastHost({ toasts }) {
 }
 
 export default function UrbanPacer() {
-  const { user, setUser, logout, token } = useAuth()
+  const { user, setUser, logout, token, bootstrapping } = useAuth()
   const [view, setView] = useState('lobby')
   const [claimed, setClaimed] = useState(() => {
     try {
@@ -4867,8 +4867,25 @@ export default function UrbanPacer() {
   return (
     <div className="up-root fixed inset-0 overflow-hidden bg-ink-900 text-white">
       <AnimatePresence mode="wait">
-        {!token ? (
-          <LoginView key="login" wsStatus={wsStatus} player={user} />
+        {bootstrapping ? (
+          <motion.div
+            key="boot"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 flex flex-col items-center justify-center gap-4"
+          >
+            <NeonGrid />
+            <div className="relative z-10 flex flex-col items-center gap-4">
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-neon-pink to-neon-violet shadow-glow">
+                <Footprints className="w-10 h-10 text-white animate-pulse" strokeWidth={2.5} />
+              </div>
+              <h1 className="font-display text-4xl font-extrabold bg-gradient-to-r from-neon-pink via-neon-violet to-neon-cyan bg-clip-text text-transparent">
+                CloudRISK
+              </h1>
+              <p className="text-white/50 text-sm tracking-widest uppercase animate-pulse">Conectando...</p>
+            </div>
+          </motion.div>
         ) : view === 'lobby' ? (
           <Dashboard
             key="lobby"

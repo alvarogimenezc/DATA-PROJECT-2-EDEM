@@ -39,6 +39,7 @@ let bootstrapPromise = null
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(localStorage.getItem('cloudrisk_token'))
   const [user, setUser] = useState(null)
+  const [bootstrapping, setBootstrapping] = useState(true)
 
   useEffect(() => {
     if (!bootstrapPromise) {
@@ -50,7 +51,6 @@ export function AuthProvider({ children }) {
             const r = await api.get('/api/v1/users/me')
             return { token: stored, user: r.data }
           } catch {
-            // Stored token is stale (API restarted, in-memory store wiped). Fall through.
             localStorage.removeItem('cloudrisk_token')
             delete api.defaults.headers.common['Authorization']
           }
@@ -63,11 +63,14 @@ export function AuthProvider({ children }) {
     }
 
     let active = true
-    bootstrapPromise.then(({ token: t, user: u }) => {
-      if (!active) return
-      setToken(t)
-      setUser(u)
-    })
+    bootstrapPromise
+      .then(({ token: t, user: u }) => {
+        if (!active) return
+        setToken(t)
+        setUser(u)
+      })
+      .catch(() => { /* auto-login failed, app renders without auth */ })
+      .finally(() => { if (active) setBootstrapping(false) })
     return () => { active = false }
   }, [])
 
@@ -91,7 +94,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthContext.Provider value={{ token, user, setUser, login, logout }}>
+    <AuthContext.Provider value={{ token, user, setUser, login, logout, bootstrapping }}>
       {children}
     </AuthContext.Provider>
   )
