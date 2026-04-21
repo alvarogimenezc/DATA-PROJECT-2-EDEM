@@ -35,7 +35,15 @@ export default function useWebSocket(userId, onMessage) {
   const connect = useCallback(() => {
     if (!userId) return
     if (manuallyClosed.current) return
-    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8080'
+    // WS URL resolution (prod no recibe VITE_WS_URL como build-arg, así que
+    // derivamos de VITE_API_URL cambiando el esquema: https→wss, http→ws).
+    // Fallback final: ws://localhost:8080 para dev sin env vars.
+    const explicitWs = import.meta.env.VITE_WS_URL
+    const apiUrl = import.meta.env.VITE_API_URL
+    const derivedWs = apiUrl
+      ? apiUrl.replace(/^https:\/\//i, 'wss://').replace(/^http:\/\//i, 'ws://')
+      : null
+    const wsUrl = explicitWs || derivedWs || 'ws://localhost:8080'
     setStatus('connecting')
 
     let socket

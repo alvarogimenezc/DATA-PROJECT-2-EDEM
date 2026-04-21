@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 
 from cloudrisk_api.configuracion import settings, MIN_GARRISON
 from cloudrisk_api.database import batallas as batallas_repo, zonas as zonas_repo
+from cloudrisk_api.services.asesor_ia import get_battle_advice
 from cloudrisk_api.services.autenticacion import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,27 @@ def battle_history(limit: int = 10, current_user: dict = Depends(get_current_use
         zone = zonas_repo.get_zone_by_id(b.get("zone_id", ""))
         enriched.append({**b, "zone_name": zone.get("name", "Zona desconocida") if zone else "Zona desconocida"})
     return enriched
+
+
+@router.get("/{battle_id}/advice")
+def battle_advice(battle_id: str, current_user: dict = Depends(get_current_user)):
+    """Consejo táctico determinista para una batalla en curso.
+
+    Consumido por `BattlePanel.getAdvice()` en el frontend. La lógica es
+    pura (sin deps externas — ver services/asesor_ia.py), así que es
+    seguro y barato mantenerla aunque el sistema canónico de combate
+    haya pasado a `POST /zones/{id}/attack` con dados Risk.
+    """
+    battle = batallas_repo.get_battle_by_id(battle_id)
+    if not battle:
+        raise HTTPException(status_code=404, detail="Battle not found")
+    zone = zonas_repo.get_zone_by_id(battle["zone_id"])
+    context = {
+        "attacker_power": battle.get("attacker_power", 0),
+        "defender_power": battle.get("defender_power", 0),
+        "defense_level": zone.get("defense_level", 0) if zone else 0,
+    }
+    return {"battle_id": battle_id, "advice": get_battle_advice(context)}
 
 
 @router.post("/{battle_id}/resolve")
