@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react'
 import api from '../api/client'
 
 const ARMY_COLORS = ['#c41e3a', '#1e4d8c', '#2d5a27', '#c4a000', '#6b3fa0', '#d4740e']
-
 const ZOOM_CLASSES = ['cq-zone-marker--hidden', 'cq-zone-marker--dot', 'cq-zone-marker--badge-only', 'cq-zone-marker--compact', 'cq-zone-marker--large']
 
 function hashColor(seed) {
@@ -55,12 +54,12 @@ function buildPopupHTML(props) {
   return `
     <div class="territory-card">
       <div class="territory-card-header" style="background:${color}">
-        <span class="territory-icon">${isOwned ? '\u2694\uFE0F' : '\uD83C\uDFF3\uFE0F'}</span>
+        <span class="territory-icon">${isOwned ? '⚔️' : '🏳️'}</span>
         ${props.name || 'Desconocido'}
       </div>
       <div class="territory-card-body">
         <div class="territory-card-row">
-          <span class="territory-card-label">Facci\u00f3n</span>
+          <span class="territory-card-label">Facción</span>
           <span class="territory-card-value">${props.ownerClanName || 'Tierra de Nadie'}</span>
         </div>
         <div class="territory-card-row">
@@ -76,9 +75,6 @@ function buildPopupHTML(props) {
   `
 }
 
-// ═══════════════════════════════════════════
-//  CloudRISK Wave Animation
-// ═══════════════════════════════════════════
 function createConquestPulse(map, lngLat, color) {
   const id = 'cloudrisk-pulse-' + Date.now()
   map.addSource(id, {
@@ -86,7 +82,7 @@ function createConquestPulse(map, lngLat, color) {
     data: { type: 'Point', coordinates: [lngLat.lng, lngLat.lat] },
   })
   map.addLayer({
-    id: id,
+    id,
     type: 'circle',
     source: id,
     paint: {
@@ -117,9 +113,6 @@ function createConquestPulse(map, lngLat, color) {
   requestAnimationFrame(animate)
 }
 
-// ═══════════════════════════════════════════
-//  Notification Toast
-// ═══════════════════════════════════════════
 function NotificationToast({ notifications, onDismiss }) {
   if (!notifications.length) return null
   return (
@@ -131,16 +124,13 @@ function NotificationToast({ notifications, onDismiss }) {
             <div className="notif-title">{n.title}</div>
             <div className="notif-msg">{n.message}</div>
           </div>
-          <button className="notif-close" onClick={() => onDismiss(n.id)}>{'\u2715'}</button>
+          <button className="notif-close" onClick={() => onDismiss(n.id)}>✕</button>
         </div>
       ))}
     </div>
   )
 }
 
-// ═══════════════════════════════════════════
-//  Minimap Component
-// ═══════════════════════════════════════════
 function Minimap({ geojsonRef, playerPos }) {
   const miniRef = useRef(null)
   const miniMapRef = useRef(null)
@@ -184,7 +174,6 @@ function Minimap({ geojsonRef, playerPos }) {
     return () => { mm.remove(); miniMapRef.current = null }
   }, [geojsonRef])
 
-  // Update player dot on minimap
   useEffect(() => {
     const mm = miniMapRef.current
     if (!mm || !playerPos) return
@@ -213,9 +202,6 @@ function Minimap({ geojsonRef, playerPos }) {
   return <div ref={miniRef} className="minimap" />
 }
 
-// ═══════════════════════════════════════════
-//  Main GameMap
-// ═══════════════════════════════════════════
 export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, viewMode = 'control', refreshKey }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
@@ -236,7 +222,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
     const id = Date.now()
     setNotifications(prev => [...prev, { id, type, icon, title, message }])
     setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 5000)
-    // Browser notification
     if (Notification.permission === 'granted') {
       new Notification(title, { body: message, icon: '/favicon.ico' })
     }
@@ -246,7 +231,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
     setNotifications(prev => prev.filter(n => n.id !== id))
   }
 
-  // Request browser notification permission on mount
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission()
@@ -269,7 +253,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
     map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right')
 
     map.on('load', async () => {
-      // Load GeoJSON
       let geojson = null
       for (const path of ['/valencia_districts.geojson', '/valencia_original_57.geojson']) {
         try {
@@ -278,7 +261,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
         } catch { /* next */ }
       }
 
-      // Load server data
       let serverData = []
       try {
         const res = await api.get('/api/v1/state/locations')
@@ -290,7 +272,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
         } catch { serverData = [] }
       }
 
-      // Build from server if no local GeoJSON
       if (!geojson?.features?.length && serverData.length) {
         geojson = {
           type: 'FeatureCollection',
@@ -311,7 +292,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
 
       if (!geojson?.features?.length) return
 
-      // Enrich features
       const byName = new Map(serverData.map(l => [l.name?.toLowerCase(), l]))
       geojson.features.forEach((f, i) => {
         const match = byName.get(f.properties.name?.toLowerCase()) || {}
@@ -326,18 +306,14 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
 
       geojsonRef.current = geojson
 
-      // ── FOG OF WAR ──
-      // Compute distance from map center to each zone centroid for initial fog
       const mapCenter = map.getCenter()
       const centerCoord = [mapCenter.lng, mapCenter.lat]
       geojson.features.forEach(f => {
         const centroid = getCentroid(f.geometry)
         const dist = distanceDeg(centroid, centerCoord)
-        // Fog: zones further than 0.04 deg (~4km) get progressively dimmer
         f.properties.fogOpacity = Math.max(0.15, Math.min(0.55, 0.55 - dist * 3))
       })
 
-      // Add source + layers
       map.addSource('zones', { type: 'geojson', data: geojson })
 
       map.addLayer({
@@ -362,7 +338,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
         },
       })
 
-      // large > 0.0005 deg² (peripheral barrios), medium > 0.00008 (mid-size), small ≤ 0.00008 (dense historic core)
       function zoomClass(z, areaDeg) {
         const large  = areaDeg > 0.0005
         const medium = areaDeg > 0.00008
@@ -415,13 +390,12 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
       }
       map.on('zoomend', () => applyZoomClass(map.getZoom()))
 
-      // ── FOG UPDATE ON MOVE ──
       map.on('moveend', () => {
         const c = map.getCenter()
         const cc = [c.lng, c.lat]
         const src = map.getSource('zones')
         if (!src || !geojsonRef.current) return
-        geojsonRef.current.features.forEach((f, i) => {
+        geojsonRef.current.features.forEach(f => {
           const centroid = getCentroid(f.geometry)
           const dist = distanceDeg(centroid, cc)
           f.properties.fogOpacity = Math.max(0.15, Math.min(0.55, 0.55 - dist * 3))
@@ -433,7 +407,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
         })
       })
 
-      // Hover
       let hoveredId = null
       map.on('mousemove', 'zones-fill', (e) => {
         if (!e.features?.length) return
@@ -447,27 +420,23 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
         map.getCanvas().style.cursor = ''
       })
 
-      // Click → popup + cloudrisk pulse + callback
       map.on('click', 'zones-fill', (e) => {
         if (!e.features?.length) return
         const p = e.features[0].properties
 
-        // CloudRISK pulse animation
         createConquestPulse(map, e.lngLat, p.color || '#c41e3a')
 
-        // Popup
         new maplibregl.Popup({ offset: 10, maxWidth: '280px' })
           .setLngLat(e.lngLat)
           .setHTML(buildPopupHTML(p))
           .addTo(map)
 
-        // Notification
         if (p.ownerClanId) {
-          addNotification('warning', '\u2694\uFE0F', 'Territorio Enemigo',
-            `${p.name} controlado por ${p.ownerClanName || 'una facci\u00f3n enemiga'} con ${p.totalArmies || 0} tropas.`)
+          addNotification('warning', '⚔️', 'Territorio Enemigo',
+            `${p.name} controlado por ${p.ownerClanName || 'una facción enemiga'} con ${p.totalArmies || 0} tropas.`)
         } else {
-          addNotification('info', '\uD83C\uDFF3\uFE0F', 'Tierra de Nadie',
-            `${p.name} est\u00e1 sin conquistar. \u00A1Desp\u00adliega tropas para reclamarlo!`)
+          addNotification('info', '🏳️', 'Tierra de Nadie',
+            `${p.name} está sin conquistar. ¡Despliega tropas para reclamarlo!`)
         }
 
         onZoneClickRef.current?.({
@@ -482,9 +451,7 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
       })
     })
 
-    // GPS tracking — we MUST capture the watchId so we can clearWatch on
-    // cleanup, otherwise each remount leaks a new watcher and we get
-    // duplicate onLocationUpdate callbacks with stale closures.
+    // Capturamos watchId para clearWatch en cleanup y evitar watchers duplicados
     let watchId = null
     if (navigator.geolocation) {
       watchId = navigator.geolocation.watchPosition(
@@ -518,7 +485,6 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
     }
 
     return () => {
-      // Stop watching GPS — prevents leaked watchers on remount / hot reload
       if (watchId !== null && navigator.geolocation) {
         navigator.geolocation.clearWatch(watchId)
       }
@@ -535,6 +501,7 @@ export default function GameMap({ onZoneClick, onLocationUpdate, selectedZone, v
 
   return (
     <div className="map-wrapper">
+      <NotificationToast notifications={notifications} onDismiss={dismissNotification} />
       <div ref={containerRef} className="map-container" />
     </div>
   )

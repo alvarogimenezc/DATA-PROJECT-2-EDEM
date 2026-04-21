@@ -2,12 +2,14 @@ import { useEffect, useState, useCallback } from 'react'
 import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
+
+function rollDice(attackerPower, defenderPower) {
+=======
 /**
  * Simulates a Risk-style dice roll with animation.
  * Returns { attackDice: number[], defenseDice: number[], result: 'attacker'|'defender' }
  */
-function rollDice(attackerPower, defenderPower) {
-  // Number of dice based on relative power (Risk rules: attacker up to 3, defender up to 2)
+
   const atkCount = Math.min(3, Math.max(1, Math.ceil(attackerPower / 100)))
   const defCount = Math.min(2, Math.max(1, Math.ceil(defenderPower / 100)))
   const atkDice = Array.from({ length: atkCount }, () => Math.floor(Math.random() * 6) + 1)
@@ -15,7 +17,6 @@ function rollDice(attackerPower, defenderPower) {
   const defDice = Array.from({ length: defCount }, () => Math.floor(Math.random() * 6) + 1)
     .sort((a, b) => b - a)
 
-  // Compare highest dice pairs (Risk rules)
   let atkWins = 0
   let defWins = 0
   const pairs = Math.min(atkDice.length, defDice.length)
@@ -24,7 +25,6 @@ function rollDice(attackerPower, defenderPower) {
     else defWins++
   }
 
-  // If actual power difference is huge, bias the result
   const powerRatio = attackerPower / Math.max(1, defenderPower)
   const result = powerRatio > 1.5 ? 'attacker'
     : powerRatio < 0.7 ? 'defender'
@@ -36,7 +36,6 @@ function rollDice(attackerPower, defenderPower) {
 function DiceDisplay({ attackDice, defenseDice, result, rolling, landed }) {
   const [faces, setFaces] = useState({ atk: attackDice, def: defenseDice })
 
-  // While rolling, cycle random numbers every 100ms
   useEffect(() => {
     if (!rolling) {
       setFaces({ atk: attackDice, def: defenseDice })
@@ -82,8 +81,10 @@ function DiceDisplay({ attackDice, defenseDice, result, rolling, landed }) {
       {!rolling && result && (
         <div className={`dice-result ${result === 'attacker' ? 'atk-wins' : 'def-wins'}`}>
           {result === 'attacker'
-            ? '\u2694\uFE0F Victoria del Atacante!'
-            : '\uD83D\uDEE1\uFE0F El Defensor Resiste!'}
+
+            ? '⚔️ Victoria del Atacante!'
+            : '🛡️ El Defensor Resiste!'}
+
         </div>
       )}
     </div>
@@ -94,7 +95,9 @@ export default function BattlePanel({ onClose, currentZone }) {
   const { user } = useAuth()
   const [battles, setBattles] = useState([])
   const [advice, setAdvice] = useState({})
-  const [diceState, setDiceState] = useState({}) // { [battleId]: { attackDice, defenseDice, result, rolling } }
+
+  const [diceState, setDiceState] = useState({})
+
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -111,12 +114,15 @@ export default function BattlePanel({ onClose, currentZone }) {
       const res = await api.get(`/api/v1/battles/${battleId}/advice`)
       setAdvice(a => ({ ...a, [battleId]: res.data.advice }))
     } catch {
-      setAdvice(a => ({ ...a, [battleId]: 'El consejero no est\u00e1 disponible.' }))
+
+      setAdvice(a => ({ ...a, [battleId]: 'El consejero no está disponible.' }))
+
     }
   }
 
   const handleRollDice = useCallback((battle) => {
-    // Start rolling animation
+
+
     const atkCount = Math.min(3, Math.max(1, Math.ceil(battle.attacker_power / 100)))
     const defCount = Math.min(2, Math.max(1, Math.ceil(battle.defender_power / 100)))
     setDiceState(prev => ({
@@ -130,18 +136,16 @@ export default function BattlePanel({ onClose, currentZone }) {
       }
     }))
 
-    // After 2s of spinning, land the dice with final values
+
     setTimeout(() => {
       const result = rollDice(battle.attacker_power, battle.defender_power)
       setDiceState(prev => ({
         ...prev,
         [battle.id]: { ...result, rolling: false, landed: true }
       }))
-
-      // Also try to resolve the battle on the backend
+      
       api.post(`/api/v1/battles/${battle.id}/resolve`).catch(() => {})
 
-      // Clear landed state after animation
       setTimeout(() => {
         setDiceState(prev => ({
           ...prev,
@@ -159,8 +163,10 @@ export default function BattlePanel({ onClose, currentZone }) {
   return (
     <div className="panel">
       <div className="panel-header">
-        <h2>{'\u2694\uFE0F'} Consejo de Guerra</h2>
-        <button onClick={onClose}>{'\u2715'}</button>
+    
+        <h2>⚔️ Consejo de Guerra</h2>
+        <button onClick={onClose}>✕</button>
+
       </div>
       <div className="panel-body">
         {canAttack && (
@@ -181,15 +187,15 @@ export default function BattlePanel({ onClose, currentZone }) {
             {battles.map(b => (
               <div key={b.id} className="battle-item">
                 <div className="battle-info">
-                  <span>{'\uD83D\uDDFA\uFE0F'} Zona {b.zone_id.slice(0, 8)}{'\u2026'}</span>
+
+                  <span>🗺️ Zona {b.zone_id.slice(0, 8)}…</span>
                   <div className="battle-powers">
-                    <span className="power-atk">{'\u2694\uFE0F'}{b.attacker_power}</span>
+                    <span className="power-atk">⚔️{b.attacker_power}</span>
                     <span className="power-vs">vs</span>
-                    <span className="power-def">{'\uD83D\uDEE1\uFE0F'}{b.defender_power}</span>
+                    <span className="power-def">🛡️{b.defender_power}</span>
                   </div>
                 </div>
 
-                {/* Dice roll section */}
                 {diceState[b.id] && (
                   <DiceDisplay
                     attackDice={diceState[b.id].attackDice}

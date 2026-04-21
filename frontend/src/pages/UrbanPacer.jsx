@@ -36,10 +36,13 @@ import '../styles/urban-pacer.css'
 // ─────────────────────────────────────────────────────────────
 const FACTION_COLORS = ['#f43f5e', '#06b6d4', '#facc15', '#a855f7', '#ff8c2a', '#5fee9a']
 
+<<<<<<< Front_Ricardo
+=======
 // Single source of truth for the 4 lobby players. Used by the HUD, the bot
 // overlay, SimulateBotsButton, TurnBanner, etc. Keeping it at module scope
 // avoids the drift we had before (BOT_PLAYER_COLORS lacked Norte, hard-coded
 // duplicates in MapView/TurnBanner/SimulateBotsButton).
+>>>>>>> main
 const PLAYERS = {
   'demo-player-001': { key: 'norte', name: 'Norte', color: '#f43f5e' },
   'demo-player-002': { key: 'sur',   name: 'Sur',   color: '#facc15' },
@@ -47,6 +50,8 @@ const PLAYERS = {
   'demo-player-004': { key: 'oeste', name: 'Oeste', color: '#a855f7' },
 }
 
+<<<<<<< Front_Ricardo
+=======
 // ─────────────────────────────────────────────────────────────
 // Shared turn-polling singleton — before, 4 components polled
 // /api/v1/turn/ every 3 s independently (TurnBanner, ActionPanel,
@@ -54,6 +59,7 @@ const PLAYERS = {
 // every subscriber, cutting traffic by 4× and giving consistent
 // reads across components on the same frame.
 // ─────────────────────────────────────────────────────────────
+>>>>>>> main
 const _turnPoll = {
   data: null,
   listeners: new Set(),
@@ -65,7 +71,11 @@ const _turnPoll = {
         const r = await api.get('/api/v1/turn/')
         this.data = r.data
         this.listeners.forEach(fn => { try { fn(this.data) } catch {} })
+<<<<<<< Front_Ricardo
+      } catch { /* swallow */ }
+=======
       } catch { /* swallow — individual components will fall back to null */ }
+>>>>>>> main
     }
     tick()
     this.interval = setInterval(tick, 3000)
@@ -91,6 +101,10 @@ function useTurnPoll() {
   }, [])
   return turn
 }
+<<<<<<< Front_Ricardo
+
+=======
+>>>>>>> main
 const hashColor = (seed) => {
   let h = 0
   const s = String(seed || '')
@@ -1262,8 +1276,11 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
             padding: 60, duration: 900, maxZoom: 14.5,
           })
         },
+<<<<<<< Front_Ricardo
+=======
         // Vuela a una zona concreta (la que ha conquistado / atacado un bot).
         // Opcional: opts.zoom y opts.duration.
+>>>>>>> main
         flyToZone: (zoneId, opts = {}) => {
           const gj = geojsonRef.current
           if (!gj || !mapRef.current) return
@@ -1277,10 +1294,13 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
             essential: true,
           })
         },
+<<<<<<< Front_Ricardo
+=======
         // Pulso breve sobre una zona — marca 'pulse: true' en feature-state.
         // El color del pulso lo lee la capa 'zones-pulse' desde la propia
         // propiedad `color` de la feature (color del owner actual), así NO
         // tenemos que mutar el GeoJSON ni llamar setData — sólo feature-state.
+>>>>>>> main
         pulseZone: (zoneId, { duration = 2200 } = {}) => {
           const map = mapRef.current
           const gj = geojsonRef.current
@@ -1482,16 +1502,24 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
         },
       })
 
+<<<<<<< Front_Ricardo
+      // Pulse layer — activada vía feature-state 'pulse' cuando un bot ataca/conquista/fortifica.
+=======
       // Pulse layer — activada vía feature-state 'pulse' cuando un bot
       // ataca / conquista / fortifica. Pinta un borde grueso del color del
       // propio polígono (propiedad `color` = owner) durante ~2s.
       // No intercepta clicks (type=line) y evita cualquier setData.
+>>>>>>> main
       map.addLayer({
         id: 'zones-pulse',
         type: 'line',
         source: 'zones',
         paint: {
           'line-color': ['get', 'color'],
+<<<<<<< Front_Ricardo
+          'line-width': ['case', ['boolean', ['feature-state', 'pulse'], false], 8, 0],
+          'line-opacity': ['case', ['boolean', ['feature-state', 'pulse'], false], 0.9, 0],
+=======
           'line-width': [
             'case',
             ['boolean', ['feature-state', 'pulse'], false], 8,
@@ -1502,6 +1530,7 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
             ['boolean', ['feature-state', 'pulse'], false], 0.9,
             0,
           ],
+>>>>>>> main
           'line-blur': 2,
         },
       })
@@ -1509,6 +1538,10 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
       rebuildMarkers()
 
       // ── Battlefield layers (inserted before zones-border to preserve order) ──
+<<<<<<< Front_Ricardo
+      // Fog of War: unclaimed zones get a dark overlay — feel unexplored.
+      // Filtramos por FREE_COLOR (gris) en lugar de '#facc15' (que ahora es el Sur).
+=======
       // Fog of War: unclaimed zones get a dark overlay → feel unexplored.
       //
       // BUG encontrado en la auditoría: el filtro original era
@@ -1518,6 +1551,7 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
       // de guerra se estaba pintando encima de las zonas de Sur y dejaba
       // sólo los bordes amarillos visibles (sin fill). Nueva regla: filtrar
       // explícitamente por FREE_COLOR (gris).
+>>>>>>> main
       map.addLayer({
         id: 'zones-fog',
         type: 'fill',
@@ -1527,8 +1561,12 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
       }, 'zones-border')
 
       // Owned/rival glow: animated breathing fill — territories feel alive.
+<<<<<<< Front_Ricardo
+      // Excluye FREE_COLOR (gris) en lugar del amarillo que ahora pertenece al Sur.
+=======
       // Misma corrección: antes excluía amarillo pensando que era "libre";
       // ahora excluye explícitamente el color de libre (gris).
+>>>>>>> main
       map.addLayer({
         id: 'zones-owned-glow',
         type: 'fill',
@@ -1597,6 +1635,9 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
   }, [retryTick, rebuildMarkers]) // NO depende de currentUserId/ClanId
 
   // #3b — Refrescar overlay cuando cambia refreshKey (tras deploy/attack/fortify).
+<<<<<<< Front_Ricardo
+  // Cada bump dispara su propio fetch; `cancelled` (cleanup) descarta respuestas obsoletas.
+=======
   //
   // BUG detectado en la auditoría: el antiguo guard `refreshingRef` serializaba
   // los fetches pero descartaba el segundo bump si venía antes de que terminase
@@ -1610,6 +1651,7 @@ function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0
   // Ahora cada bump dispara su propio fetch. La variable local `cancelled`
   // (seteada por el cleanup del effect anterior cuando llega el nuevo) descarta
   // las respuestas obsoletas, así que el último bump siempre pinta el último.
+>>>>>>> main
   useEffect(() => {
     if (refreshKey === 0 || !mapReadyRef.current) return
     const map = mapRef.current
@@ -1712,11 +1754,14 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
   const [targetZone, setTargetZone] = useState('') // for fortify: destination zone id
   const [attackResult, setAttackResult] = useState(null)  // { attacker_rolls, defender_rolls, conquered, ... }
   const turn = useTurnPoll()
+<<<<<<< Front_Ricardo
+=======
   // Contexto del ataque precalculado al abrir el modal: ¿quién defiende la
   // zona?, ¿cuántas tropas tiene?, ¿tengo alguna zona propia adyacente con
   // ≥2 tropas desde la que atacar? Así desactivamos "LANZAR OFENSIVA" antes
   // de que el usuario clique en vano y mostramos info útil DE LA ZONA OBJETIVO
   // (en vez de mi balance de tropas, que en un modal de ataque no pinta nada).
+>>>>>>> main
   const [attackContext, setAttackContext] = useState({
     loaded: false, validOrigins: [], targetDefense: 0, targetOwner: null,
   })
@@ -1745,8 +1790,11 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
     return () => { cancelled = true }
   }, [kind, zone?.id])
 
+<<<<<<< Front_Ricardo
+=======
   // (poller /turn/ centralizado vía useTurnPoll arriba)
 
+>>>>>>> main
   // Precarga del contexto de ataque: una sola vez al abrir el modal sobre
   // una zona enemiga. Si luego cambian las zonas (yo conquisto algo nuevo)
   // el usuario ya habrá cerrado y reabierto el modal, así que no hace falta
@@ -2223,6 +2271,11 @@ function RightPanel({ player, clans, missions, battleHistory, leaderboard, zones
   return (
     <motion.div
       initial={{ x: 30, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.1 }}
+<<<<<<< Front_Ricardo
+      // self-start + justify-start → columna ocupa sólo altura de su
+      // contenido y tab bar ancla al top (sin hueco muerto arriba).
+      className="col-span-3 w-full flex flex-col justify-start gap-2 self-start"
+=======
       // w-full: cuando se usa dentro de un flex-col, self-start colapsaba el
       //   panel al ancho mínimo de su contenido (~250 px frente a los 446 px
       //   del resto de cards de la columna). Forzamos w-full para que ocupe
@@ -2230,6 +2283,7 @@ function RightPanel({ player, clans, missions, battleHistory, leaderboard, zones
       // col-span-3: conservado por si el componente vuelve a usarse como
       //   hijo directo de un grid en otro lado — es inocuo dentro de flex.
       className="col-span-3 w-full flex flex-col justify-start gap-2"
+>>>>>>> main
     >
       {/* Tab bar */}
       <div className="flex gap-1 rounded-xl p-1" style={{ background: 'rgba(255,255,255,0.05)' }}>
@@ -3243,6 +3297,8 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
 
           </div>
 
+<<<<<<< Front_Ricardo
+=======
           {/* RightPanel: tabs Misiones | Batallas | Top.
               Sustituye a la mini-card hardcoded de 3 misiones falsas que
               había aquí antes — ahora muestra las 5 misiones reales del
@@ -3250,6 +3306,7 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
               panel se renderizaba como un 4.º `col-span-3` en el grid y
               hacía wrap a una segunda fila FUERA del viewport (main tiene
               overflow-hidden), quedando invisible para el usuario. */}
+>>>>>>> main
           <RightPanel
             player={player}
             clans={clans}
@@ -3262,10 +3319,7 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
             onBattleResolved={onRefresh}
           />
 
-          {/* Consejos para runners — carrusel rotativo de 12 tips
-              curados de Big Issue, adidas, Running Channel, Runner's
-              World, etc. Rota cada 8 s y el jugador puede avanzar
-              manualmente pulsando la flecha. */}
+          {/* Consejos para runners — carrusel rotativo de 12 tips */}
           <RunningTipsCarousel />
         </motion.div>
       </main>
@@ -3499,8 +3553,11 @@ function TurnBanner({ myUserId }) {
   const who = turn.current_player_id === 'demo-player-001'
     ? getNorteName()
     : (p?.name || turn.current_player_id.slice(0, 8))
+<<<<<<< Front_Ricardo
+=======
   // Mi turno → verde lima; turno de un rival → color del rival (así
   // el jugador asocia el banner al color del bot que juega ahora).
+>>>>>>> main
   const tone = mine ? '#facc15' : (p?.color || '#f43f5e')
   return (
     <div
@@ -3609,9 +3666,13 @@ function EndTurnButton({ myUserId }) {
     try { await api.post('/api/v1/turn/end') } finally { setBusy(false) }
   }, [])
 
+<<<<<<< Front_Ricardo
+  // Atajo de teclado: Enter termina el turno cuando es el mío y no hay input con foco.
+=======
   // Atajo de teclado: Enter termina el turno cuando es el mío y no hay
   // un input con foco (drawer, modales, etc.). Atajo solicitado en la
   // auditoría UX.
+>>>>>>> main
   useEffect(() => {
     if (!mine) return
     const onKey = (e) => {
@@ -3645,15 +3706,40 @@ function EndTurnButton({ myUserId }) {
 // por llamada, pausa de 4.5 s) hasta que vuelve mi turno. Así se ve:
 //  - El TurnBanner cambiando: "Turno de Sur" → "Turno de Este" → "Turno de Oeste"
 //  - El mapa repintándose entre bot y bot gracias al onRefresh
+<<<<<<< Front_Ricardo
+// Bot action overlay — animated cards, auto-dismiss 4.5 s, max 4 simultaneous
+=======
 // ─────────────────────────────────────────────────────────────
 // Bot action overlay — animated cards for attack / conquer / fortify
 // ─────────────────────────────────────────────────────────────
+>>>>>>> main
 const META_ACTION = {
   attack:  { emoji: '⚔️', label: 'ATACA',    glow: '#f43f5e' },
   conquer: { emoji: '🏴', label: 'CONQUISTA', glow: '#facc15' },
   fortify: { emoji: '🛡️', label: 'FORTIFICA', glow: '#06b6d4' },
 }
 
+<<<<<<< Front_Ricardo
+function useReducedMotionCached() {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handler = (e) => setReduced(e.matches)
+    try { mq.addEventListener('change', handler) }
+    catch { mq.addListener(handler) }
+    return () => {
+      try { mq.removeEventListener('change', handler) }
+      catch { mq.removeListener(handler) }
+    }
+  }, [])
+  return reduced
+}
+
+=======
 /**
  * Overlay de acciones de bot.
  *
@@ -3672,18 +3758,25 @@ const META_ACTION = {
  *    para que el feedback de "se va a ir" sea obvio.
  *  - Se respeta prefers-reduced-motion: sin spring, sin pulso, transición simple.
  */
+>>>>>>> main
 const BattleEventOverlay = React.memo(BattleEventOverlayImpl)
 function BattleEventOverlayImpl({ events, mapActionsRef, myUserId }) {
   const [queue, setQueue] = useState([])
   const seenRef = useRef(new Set())
   const reduceMotion = useReducedMotionCached()
 
+<<<<<<< Front_Ricardo
+=======
   // Ingresa eventos nuevos en la cola, aplicando fly-to + pulse en el mapa.
+>>>>>>> main
   useEffect(() => {
     if (!events || events.length === 0) return
     const fresh = events.filter(ev => ev._key && !seenRef.current.has(ev._key))
     if (fresh.length === 0) return
     fresh.forEach(ev => seenRef.current.add(ev._key))
+<<<<<<< Front_Ricardo
+    setQueue(q => [...q, ...fresh].slice(-4))
+=======
     setQueue(q => {
       const combined = [...q, ...fresh]
       return combined.slice(-4) // máximo 4 tarjetas simultáneas
@@ -3691,6 +3784,7 @@ function BattleEventOverlayImpl({ events, mapActionsRef, myUserId }) {
     // Encadenamos fly-to con 250 ms de offset entre acciones para que no
     // la cámara no brinque como una mosca. Sólo volamos para acciones que
     // tienen zone_id (idle ya viene filtrado por el caller).
+>>>>>>> main
     const actions = mapActionsRef?.current
     if (!actions) return
     fresh.forEach((ev, i) => {
@@ -3706,7 +3800,10 @@ function BattleEventOverlayImpl({ events, mapActionsRef, myUserId }) {
     })
   }, [events, mapActionsRef])
 
+<<<<<<< Front_Ricardo
+=======
   // Auto-dismiss: cada tarjeta vive 4.5 s desde que entra en cola.
+>>>>>>> main
   useEffect(() => {
     if (queue.length === 0) return
     const oldest = queue[0]
@@ -3716,8 +3813,11 @@ function BattleEventOverlayImpl({ events, mapActionsRef, myUserId }) {
     return () => clearTimeout(t)
   }, [queue])
 
+<<<<<<< Front_Ricardo
+=======
   // Limpieza de `seenRef` cuando no hay nada en cola para que no crezca sin
   // fin durante una partida larga.
+>>>>>>> main
   useEffect(() => {
     if (queue.length === 0) seenRef.current = new Set()
   }, [queue])
@@ -3732,8 +3832,11 @@ function BattleEventOverlayImpl({ events, mapActionsRef, myUserId }) {
         {queue.map((ev) => {
           const m = META_ACTION[ev.action] || { emoji: '•', label: String(ev.action || '').toUpperCase(), glow: '#fff' }
           const botColor = PLAYERS[ev.bot]?.color || '#fff'
+<<<<<<< Front_Ricardo
+=======
           // Si el bot ataca/conquista una zona MÍA, destacamos con emoji
           // de aviso para que el jugador lo registre al vuelo.
+>>>>>>> main
           const attacksMe = ev.owner_user_id === myUserId && (ev.action === 'attack' || ev.action === 'conquer')
           return (
             <motion.div
@@ -3798,6 +3901,8 @@ function BattleEventOverlayImpl({ events, mapActionsRef, myUserId }) {
   )
 }
 
+<<<<<<< Front_Ricardo
+=======
 // Helper local que respeta prefers-reduced-motion. No añadimos una lib
 // adicional — el CSS media query basta. Se memoiza con un único listener.
 function useReducedMotionCached() {
@@ -3819,6 +3924,7 @@ function useReducedMotionCached() {
   return reduced
 }
 
+>>>>>>> main
 //  - Resumen de lo que hizo el bot (qué conquistó / atacó / fortificó)
 // En total ~14 s para los 3 bots — Fran dijo "hazlos más lentos para
 // percatarme" así que cadencia cómoda > velocidad.
@@ -3828,7 +3934,10 @@ function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
   const [step, setStep] = useState(0)
   const [currentBot, setCurrentBot] = useState('')
   const [lastSummary, setLastSummary] = useState(null)
+<<<<<<< Front_Ricardo
+=======
 
+>>>>>>> main
   const isMyTurn = turn && turn.current_player_id === myUserId
 
   const run = useCallback(async () => {
@@ -3836,12 +3945,25 @@ function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
     setPlaying(true); setStep(0); setLastSummary(null)
     const sleep = (ms) => new Promise(r => setTimeout(r, ms))
     try {
-      // Max 5 iteraciones como red de seguridad por si el backend nunca
-      // devolviera el turno al usuario (no debería, pero vale más pecar).
       for (let i = 0; i < 5; i++) {
         const tRes = await api.get('/api/v1/turn/')
         const curr = tRes.data
         if (curr?.current_player_id === myUserId) break
+<<<<<<< Front_Ricardo
+        const botName = PLAYERS[curr.current_player_id]?.name || 'bot'
+        setCurrentBot(botName)
+        setStep(i + 1)
+        const simRes = await api.post('/api/v1/simulate_bots/run', { mode: 'step', actions_per_bot_turn: 15 })
+        const played = simRes?.data?.turns_played?.[0]
+        // Emit overlay events BEFORE refresh so map state is updated after
+        if (played?.actions) {
+          const evs = played.actions
+            .filter(a => a.action !== 'idle')
+            .map((a, idx) => ({ ...a, botName, bot: played.bot, _key: `${Date.now()}-${idx}` }))
+          if (evs.length > 0) onBattleEvents?.(evs)
+        }
+        await onRefresh?.()
+=======
         const botId = curr.current_player_id
         const botName = botId === 'demo-player-001' ? getNorteName() : (PLAYERS[botId]?.name || 'bot')
         setCurrentBot(botName)
@@ -3860,6 +3982,7 @@ function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
             }))
           if (evs.length > 0) onBattleEvents?.(evs)
         }
+>>>>>>> main
         if (played?.summary) {
           const s = played.summary
           const parts = []
@@ -3868,12 +3991,17 @@ function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
           if (s.fortify) parts.push(`${s.fortify} fort.`)
           setLastSummary({ bot: botName, text: parts.join(' · ') || 'sin acciones' })
         }
+<<<<<<< Front_Ricardo
+        const actionCount = played?.actions?.filter(a => a.action !== 'idle').length ?? 0
+        const botDuration = Math.max(3000, Math.min(8000, 3000 + actionCount * 400))
+=======
         // Damos tiempo al overlay para que termine las animaciones:
         // ~250 ms por acción + 1.5 s de colchón. Con eso la cámara
         // recorre toda la partida del bot sin sentirse atropellada.
         const acts = (played?.actions || []).filter(a => a.action !== 'idle').length
         const botDuration = Math.min(8000, Math.max(3500, acts * 550 + 1500))
         await onRefresh?.()
+>>>>>>> main
         await sleep(botDuration)
       }
     } catch (e) {
@@ -3900,7 +4028,12 @@ function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
   }, [isMyTurn])
 
   if (!turn) return null
+<<<<<<< Front_Ricardo
+  if (isMyTurn && !playing) return null
+  const disabled = playing
+=======
   const disabled = playing || isMyTurn
+>>>>>>> main
   const showSummary = lastSummary && lastSummary.bot === currentBot
   // Cuando es mi turno el bot-button es puro ruido (Terminar Turno ya vive al
   // lado). Solo aparece mientras corren los bots o si el jugador tarda tanto
@@ -3916,7 +4049,7 @@ function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
       type="button"
       onClick={run}
       disabled={disabled}
-      title={isMyTurn ? 'Termina tu turno primero para que jueguen los bots.' : 'Los bots juegan uno a uno hasta que vuelva tu turno.'}
+      title="Los bots juegan uno a uno hasta que vuelva tu turno."
       className="px-4 py-2.5 rounded-full font-bold text-[11px] uppercase tracking-nike-wide
                  transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed
                  flex items-center gap-2 border max-w-[420px] truncate"
@@ -3990,16 +4123,80 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
   // NeonMap rellena este ref en su efecto de init.
   const mapActionsRef = useRef(null)
 
+<<<<<<< Front_Ricardo
+  const [adjacencyMap, setAdjacencyMap] = useState(null)
+  const turn = useTurnPoll()
+
+  // Contadores del mapa (86 zonas totales en v3)
+=======
   // Contadores del mapa (84 zonas jugables — 86 del geojson menos les Cases
   // de Bàrcena y Mauella, que eran aisladas sin adyacencia):
   //   myZones    = las que posee este jugador (15 al empezar)
   //   enemyZones = las que poseen los otros 3 jugadores (45 al empezar)
   //   freeZones  = zonas sin dueño (26 libres para reclamar)
+>>>>>>> main
   const myZones = zones.filter(z => z.owner_clan_id === currentUserId).length
   const conqueredZones = zones.filter(z => z.owner_clan_id).length
   const enemyZones = conqueredZones - myZones
   const freeZones = zones.filter(z => !z.owner_clan_id).length
 
+<<<<<<< Front_Ricardo
+  const myColor = PLAYERS[currentUserId]?.color || '#facc15'
+
+  const myZoneIds = React.useMemo(
+    () => new Set(zones.filter(z => z.owner_clan_id === currentUserId).map(z => z.id)),
+    [zones, currentUserId],
+  )
+
+  const selectedIsConquistable = React.useMemo(() => {
+    if (!selected || !adjacencyMap) return false
+    const adj = adjacencyMap[selected.id] ?? []
+    return adj.some(id => myZoneIds.has(id))
+  }, [selected, adjacencyMap, myZoneIds])
+
+  // Load adjacency map once on mount
+  useEffect(() => {
+    api.get('/api/v1/zones/adjacency').then(r => setAdjacencyMap(r.data)).catch(() => {})
+  }, [])
+
+  // Bump mapRefreshKey when zones prop changes (parent re-fetched)
+  const prevZonesRef = useRef(zones)
+  useEffect(() => {
+    if (prevZonesRef.current !== zones) {
+      prevZonesRef.current = zones
+      setMapRefreshKey(k => k + 1)
+    }
+  }, [zones])
+
+  // Re-sync selected zone data when zones refreshes
+  useEffect(() => {
+    if (!selected) return
+    const fresh = zones.find(z => z.id === selected.id)
+    if (fresh) setSelected(fresh)
+  }, [zones]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keyboard shortcuts: Escape closes any open panel
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setActionPanel(null)
+        setSelected(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Auto-recenter on turn return (isMyTurn goes false → true)
+  const prevIsMyTurnRef = useRef(null)
+  useEffect(() => {
+    const isMyTurn = turn?.current_player_id === currentUserId
+    if (prevIsMyTurnRef.current === false && isMyTurn === true) {
+      mapActionsRef.current?.flyToMyZones?.()
+    }
+    prevIsMyTurnRef.current = isMyTurn
+  }, [turn, currentUserId])
+=======
   // Color del jugador actual — fuente única en PLAYERS (módulo).
   const myColor = PLAYERS[currentUserId]?.color || '#facc15'
 
@@ -4071,6 +4268,7 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
       isMine: !!isMine,
     }))
   }, [zones, selected?.id, currentUserId, currentClanId])
+>>>>>>> main
 
   const handleSuccess = () => {
     setActionPanel(null)
@@ -4411,6 +4609,10 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
               </div>
             </div>
 
+<<<<<<< Front_Ricardo
+            {/* Conquistar — shown only when zone is adjacent to an own zone */}
+            {selectedIsConquistable && !selected.owner_clan_id && (
+=======
             {/* Conquistar — sólo aparece para zonas libres que sean adyacentes
                 a alguna zona propia. Cuesta 1 tropa: si no tienes disponibles
                 el botón queda deshabilitado con un tooltip explicativo. */}
@@ -4442,6 +4644,7 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
               )
             })()}
             {!selected.owner_clan_id && !selectedIsConquistable && adjacencyMap && (
+>>>>>>> main
               <div className="px-6 pb-4">
                 <div className="px-4 py-3 rounded-xl border text-sm leading-snug"
                   style={{ background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.55)' }}>
@@ -4458,6 +4661,12 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
                 Desplegar sólo tiene sentido sobre territorio propio. */}
             <div className="px-6 pb-8 grid grid-cols-3 gap-3">
               {[
+<<<<<<< Front_Ricardo
+                { key: 'deploy',  label: 'Desplegar', Icon: Send,   color: '#facc15', bg: 'rgba(202,255,51,0.10)',  disabled: !selected.isMine },
+                { key: 'attack',  label: 'Atacar',    Icon: Swords, color: '#f43f5e', bg: 'rgba(255,45,146,0.10)', disabled: selected.isMine || !selected.owner_clan_id },
+                { key: 'fortify', label: 'Fortificar', Icon: Shield, color: '#06b6d4', bg: 'rgba(0,240,255,0.10)',  disabled: !selected.isMine },
+              ].map(({ key, label, Icon, color, bg, disabled }) => (
+=======
                 { key: 'deploy',  label: 'Desplegar', Icon: Send,   color: '#facc15', bg: 'rgba(202,255,51,0.10)',
                   disabled: !selected.isMine,
                   tip: !selected.isMine
@@ -4471,6 +4680,7 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
                   disabled: !selected.isMine,
                   tip: !selected.isMine ? 'Solo puedes mover tropas desde zonas propias' : 'Mueve tropas a otro territorio tuyo' },
               ].map(({ key, label, Icon, color, bg, disabled, tip }) => (
+>>>>>>> main
                 <motion.button key={key}
                   whileHover={!disabled ? { scale: 1.04 } : {}}
                   whileTap={!disabled ? { scale: 0.96 } : {}}
@@ -4755,6 +4965,16 @@ export default function UrbanPacer() {
   }, [token, setUser, pushToast])
   useEffect(() => { refreshDataRef.current = refreshData }, [refreshData])
 
+<<<<<<< Front_Ricardo
+  // Debounced refresh: coalesces rapid WS events into one fetch
+  const requestRefreshTimer = useRef(null)
+  const requestRefresh = useCallback(() => {
+    clearTimeout(requestRefreshTimer.current)
+    requestRefreshTimer.current = setTimeout(() => refreshDataRef.current?.(), 800)
+  }, [])
+
+  // Refresca el historial de batallas cada 15 s (always when token exists)
+=======
   // Refresca el historial de batallas cada 15 s sin relanzar el fetch completo.
   // BUG detectado en la auditoría: antes había un early-return si
   // `user?.clan_id` era falsy — pero en este juego los 4 comandantes NO
@@ -4762,6 +4982,7 @@ export default function UrbanPacer() {
   // clan en toda la lógica de zonas). Ese guard hacía que el historial
   // NUNCA se poblase aunque el backend tuviera batallas. Ahora llamamos
   // siempre que haya token.
+>>>>>>> main
   useEffect(() => {
     if (!token) return
     const poll = async () => {
@@ -4770,7 +4991,11 @@ export default function UrbanPacer() {
         if (Array.isArray(r.data)) setBattleHistory(r.data)
       } catch {}
     }
+<<<<<<< Front_Ricardo
+    poll()
+=======
     poll() // primer fetch inmediato al montar
+>>>>>>> main
     const id = setInterval(poll, 15000)
     return () => clearInterval(id)
   }, [token])
