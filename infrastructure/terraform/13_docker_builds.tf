@@ -52,14 +52,18 @@ resource "null_resource" "image_frontend" {
   triggers = {
     dockerfile = filemd5("${local.repo_root}/frontend/Dockerfile")
     package    = filemd5("${local.repo_root}/frontend/package.json")
+    api_url    = google_cloud_run_v2_service.api.uri
   }
 
   provisioner "local-exec" {
-    command     = "docker build -t ${local.registry}/frontend:latest ${local.repo_root}/frontend && docker push ${local.registry}/frontend:latest"
+    command     = "docker buildx build --platform linux/amd64 --provenance=false --push --build-arg VITE_API_URL=${google_cloud_run_v2_service.api.uri} -t ${local.registry}/frontend:latest ${local.repo_root}/frontend"
     interpreter = ["bash", "-c"]
   }
 
-  depends_on = [google_artifact_registry_repository.cloudrisk]
+  depends_on = [
+    google_artifact_registry_repository.cloudrisk,
+    google_cloud_run_v2_service.api,
+  ]
 }
 
 # =============================================================================
