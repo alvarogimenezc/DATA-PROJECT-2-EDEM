@@ -52,8 +52,13 @@ export default function FortifyPanel({ onClose }) {
   return (
     <div className="panel">
       <div className="panel-header">
+<<<<<<< Front_Ricardo
         <h2>🛡️ Fortificar</h2>
         <button onClick={onClose}>✕</button>
+=======
+        <h2>{'\uD83D\uDEE1\uFE0F'} Fortificar</h2>
+        <button onClick={onClose}>{'\u2715'}</button>
+>>>>>>> main
       </div>
       <div className="panel-body">
         <p className="empty-msg" style={{ textAlign: 'left' }}>
@@ -66,7 +71,11 @@ export default function FortifyPanel({ onClose }) {
             {locations.map(loc => (
               <button
                 key={loc.location_id || loc.id}
+<<<<<<< Front_Ricardo
                 className="clan-item"
+=======
+                className={`clan-item ${fromZone === loc ? '' : ''}`}
+>>>>>>> main
                 style={{
                   cursor: 'pointer', fontSize: '.78rem',
                   borderColor: fromZone === loc ? 'var(--leather)' : undefined,

@@ -2,7 +2,14 @@ import { useEffect, useState, useCallback } from 'react'
 import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
+
 function rollDice(attackerPower, defenderPower) {
+=======
+/**
+ * Simulates a Risk-style dice roll with animation.
+ * Returns { attackDice: number[], defenseDice: number[], result: 'attacker'|'defender' }
+ */
+
   const atkCount = Math.min(3, Math.max(1, Math.ceil(attackerPower / 100)))
   const defCount = Math.min(2, Math.max(1, Math.ceil(defenderPower / 100)))
   const atkDice = Array.from({ length: atkCount }, () => Math.floor(Math.random() * 6) + 1)
@@ -74,8 +81,10 @@ function DiceDisplay({ attackDice, defenseDice, result, rolling, landed }) {
       {!rolling && result && (
         <div className={`dice-result ${result === 'attacker' ? 'atk-wins' : 'def-wins'}`}>
           {result === 'attacker'
+
             ? '⚔️ Victoria del Atacante!'
             : '🛡️ El Defensor Resiste!'}
+
         </div>
       )}
     </div>
@@ -86,7 +95,9 @@ export default function BattlePanel({ onClose, currentZone }) {
   const { user } = useAuth()
   const [battles, setBattles] = useState([])
   const [advice, setAdvice] = useState({})
+
   const [diceState, setDiceState] = useState({})
+
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -103,11 +114,15 @@ export default function BattlePanel({ onClose, currentZone }) {
       const res = await api.get(`/api/v1/battles/${battleId}/advice`)
       setAdvice(a => ({ ...a, [battleId]: res.data.advice }))
     } catch {
+
       setAdvice(a => ({ ...a, [battleId]: 'El consejero no está disponible.' }))
+
     }
   }
 
   const handleRollDice = useCallback((battle) => {
+
+
     const atkCount = Math.min(3, Math.max(1, Math.ceil(battle.attacker_power / 100)))
     const defCount = Math.min(2, Math.max(1, Math.ceil(battle.defender_power / 100)))
     setDiceState(prev => ({
@@ -121,13 +136,16 @@ export default function BattlePanel({ onClose, currentZone }) {
       }
     }))
 
+
     setTimeout(() => {
       const result = rollDice(battle.attacker_power, battle.defender_power)
       setDiceState(prev => ({
         ...prev,
         [battle.id]: { ...result, rolling: false, landed: true }
       }))
+      
       api.post(`/api/v1/battles/${battle.id}/resolve`).catch(() => {})
+
       setTimeout(() => {
         setDiceState(prev => ({
           ...prev,
@@ -145,8 +163,10 @@ export default function BattlePanel({ onClose, currentZone }) {
   return (
     <div className="panel">
       <div className="panel-header">
+    
         <h2>⚔️ Consejo de Guerra</h2>
         <button onClick={onClose}>✕</button>
+
       </div>
       <div className="panel-body">
         {canAttack && (
@@ -167,6 +187,7 @@ export default function BattlePanel({ onClose, currentZone }) {
             {battles.map(b => (
               <div key={b.id} className="battle-item">
                 <div className="battle-info">
+
                   <span>🗺️ Zona {b.zone_id.slice(0, 8)}…</span>
                   <div className="battle-powers">
                     <span className="power-atk">⚔️{b.attacker_power}</span>
@@ -188,16 +209,16 @@ export default function BattlePanel({ onClose, currentZone }) {
                 <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap' }}>
                   {!diceState[b.id] && (
                     <button onClick={() => handleRollDice(b)}>
-                      🎲 Tirar Dados
+                      {'\uD83C\uDFB2'} Tirar Dados
                     </button>
                   )}
                   {diceState[b.id] && !diceState[b.id].rolling && (
                     <button onClick={() => handleRollDice(b)}>
-                      🎲 Volver a Tirar
+                      {'\uD83C\uDFB2'} Volver a Tirar
                     </button>
                   )}
                   <button onClick={() => getAdvice(b.id)}>
-                    🧙 Pedir Consejo
+                    {'\uD83E\uDDD9'} Pedir Consejo
                   </button>
                 </div>
 
