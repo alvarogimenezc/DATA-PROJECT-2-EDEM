@@ -35,6 +35,52 @@ import '../styles/urban-pacer.css'
 // Color palette per faction
 // ─────────────────────────────────────────────────────────────
 const FACTION_COLORS = ['#f43f5e', '#06b6d4', '#facc15', '#a855f7', '#ff8c2a', '#5fee9a']
+
+const PLAYERS = {
+  'demo-player-001': { key: 'norte', name: 'Norte', color: '#f43f5e' },
+  'demo-player-002': { key: 'sur',   name: 'Sur',   color: '#facc15' },
+  'demo-player-003': { key: 'este',  name: 'Este',  color: '#06b6d4' },
+  'demo-player-004': { key: 'oeste', name: 'Oeste', color: '#a855f7' },
+}
+
+const _turnPoll = {
+  data: null,
+  listeners: new Set(),
+  interval: null,
+  ensure() {
+    if (this.interval) return
+    const tick = async () => {
+      try {
+        const r = await api.get('/api/v1/turn/')
+        this.data = r.data
+        this.listeners.forEach(fn => { try { fn(this.data) } catch {} })
+      } catch { /* swallow */ }
+    }
+    tick()
+    this.interval = setInterval(tick, 3000)
+  },
+  stopIfEmpty() {
+    if (this.listeners.size === 0 && this.interval) {
+      clearInterval(this.interval)
+      this.interval = null
+    }
+  },
+}
+
+function useTurnPoll() {
+  const [turn, setTurn] = useState(_turnPoll.data)
+  useEffect(() => {
+    setTurn(_turnPoll.data)
+    _turnPoll.listeners.add(setTurn)
+    _turnPoll.ensure()
+    return () => {
+      _turnPoll.listeners.delete(setTurn)
+      _turnPoll.stopIfEmpty()
+    }
+  }, [])
+  return turn
+}
+
 const hashColor = (seed) => {
   let h = 0
   const s = String(seed || '')
@@ -1009,19 +1055,13 @@ async function loadValenciaGeoJSON(signal) {
 }
 
 // Per-player colours so every Comandante paints their zones differently.
-// Keys are the seeded player IDs (data/players.json). Falls back to a hash
-// colour for any unknown owner ID so future players still render.
-const PLAYER_COLORS = {
-  'demo-player-001': '#f43f5e',  // Norte  — pink
-  'demo-player-002': '#facc15',  // Sur    — lime
-  'demo-player-003': '#06b6d4',  // Este   — cyan
-  'demo-player-004': '#a855f7',  // Oeste  — violet
-}
+// Fuente única: PLAYERS (módulo). Falls back to a deterministic hash colour
+// for any unknown owner ID so future players still render.
 const FREE_COLOR = '#6b7280'   // neutral grey for unclaimed zones
 
 function colorForOwner(ownerId) {
   if (!ownerId) return FREE_COLOR
-  if (PLAYER_COLORS[ownerId]) return PLAYER_COLORS[ownerId]
+  if (PLAYERS[ownerId]) return PLAYERS[ownerId].color
   // Unknown owner (e.g. future 5th player) → deterministic colour from id hash.
   let h = 0
   for (let i = 0; i < ownerId.length; i++) h = (h * 31 + ownerId.charCodeAt(i)) | 0
@@ -1112,13 +1152,13 @@ function getViewModePaint(mode, battleZoneIds = new Set()) {
   }
 }
 
-function NeonMap({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, viewMode = 'control', battles = [], actionsRef }) {
+const NeonMap = React.memo(NeonMapImpl)
+function NeonMapImpl({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, viewMode = 'control', battles = [], actionsRef }) {
   const containerRef = useRef(null)
   const mapRef = useRef(null)
   const markersRef = useRef([])
   const geojsonRef = useRef(null)
   const mapReadyRef = useRef(false)
-  const refreshingRef = useRef(false) // C-4: evita fetches concurrentes sobre el mismo GeoJSON
   const [loadError, setLoadError] = useState(null)
   const [retryTick, setRetryTick] = useState(0)
 
@@ -1211,6 +1251,34 @@ function NeonMap({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, vi
           mapRef.current.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
             padding: 60, duration: 900, maxZoom: 14.5,
           })
+        },
+        flyToZone: (zoneId, opts = {}) => {
+          const gj = geojsonRef.current
+          if (!gj || !mapRef.current) return
+          const f = gj.features.find(ft => ft.properties?.zoneId === zoneId)
+          if (!f) return
+          const [lng, lat] = getCentroid(f.geometry)
+          mapRef.current.easeTo({
+            center: [lng, lat],
+            zoom: opts.zoom ?? 14.2,
+            duration: opts.duration ?? 900,
+            essential: true,
+          })
+        },
+        pulseZone: (zoneId, { duration = 2200 } = {}) => {
+          const map = mapRef.current
+          const gj = geojsonRef.current
+          if (!map || !gj) return
+          const f = gj.features.find(ft => ft.properties?.zoneId === zoneId)
+          if (!f) return
+          try {
+            map.setFeatureState({ source: 'zones', id: f.id }, { pulse: true })
+            setTimeout(() => {
+              try {
+                map.setFeatureState({ source: 'zones', id: f.id }, { pulse: false })
+              } catch {}
+            }, duration)
+          } catch {}
         },
       }
     }
@@ -1398,24 +1466,39 @@ function NeonMap({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, vi
         },
       })
 
+      // Pulse layer — activada vía feature-state 'pulse' cuando un bot ataca/conquista/fortifica.
+      map.addLayer({
+        id: 'zones-pulse',
+        type: 'line',
+        source: 'zones',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': ['case', ['boolean', ['feature-state', 'pulse'], false], 8, 0],
+          'line-opacity': ['case', ['boolean', ['feature-state', 'pulse'], false], 0.9, 0],
+          'line-blur': 2,
+        },
+      })
+
       rebuildMarkers()
 
       // ── Battlefield layers (inserted before zones-border to preserve order) ──
-      // Fog of War: unclaimed zones (lime) get a dark overlay → feel unexplored
+      // Fog of War: unclaimed zones get a dark overlay — feel unexplored.
+      // Filtramos por FREE_COLOR (gris) en lugar de '#facc15' (que ahora es el Sur).
       map.addLayer({
         id: 'zones-fog',
         type: 'fill',
         source: 'zones',
-        filter: ['==', ['get', 'color'], '#facc15'],
+        filter: ['==', ['get', 'color'], FREE_COLOR],
         paint: { 'fill-color': '#000205', 'fill-opacity': 0.38 },
       }, 'zones-border')
 
-      // Owned/rival glow: animated breathing fill — territories feel alive
+      // Owned/rival glow: animated breathing fill — territories feel alive.
+      // Excluye FREE_COLOR (gris) en lugar del amarillo que ahora pertenece al Sur.
       map.addLayer({
         id: 'zones-owned-glow',
         type: 'fill',
         source: 'zones',
-        filter: ['!=', ['get', 'color'], '#facc15'],
+        filter: ['!=', ['get', 'color'], FREE_COLOR],
         paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.28 },
       }, 'zones-fog')
 
@@ -1478,36 +1561,30 @@ function NeonMap({ onZoneClick, currentClanId, currentUserId, refreshKey = 0, vi
     }
   }, [retryTick, rebuildMarkers]) // NO depende de currentUserId/ClanId
 
-  // #3b — Refrescar overlay cuando cambia refreshKey (tras deploy/attack/fortify)
-  // C-4: refreshingRef serializa fetches concurrentes para evitar mutación paralela del GeoJSON
+  // #3b — Refrescar overlay cuando cambia refreshKey (tras deploy/attack/fortify).
+  // Cada bump dispara su propio fetch; `cancelled` (cleanup) descarta respuestas obsoletas.
   useEffect(() => {
     if (refreshKey === 0 || !mapReadyRef.current) return
     const map = mapRef.current
     const gj = geojsonRef.current
     if (!map || !gj) return
-    if (refreshingRef.current) return
     let cancelled = false
-    refreshingRef.current = true
     ;(async () => {
+      let serverData = []
       try {
-        let serverData = []
+        const r = await api.get('/api/v1/state/locations')
+        serverData = Array.isArray(r.data) ? r.data : []
+      } catch {
         try {
-          const r = await api.get('/api/v1/state/locations')
+          const r = await api.get('/api/v1/zones/')
           serverData = Array.isArray(r.data) ? r.data : []
-        } catch {
-          try {
-            const r = await api.get('/api/v1/zones/')
-            serverData = Array.isArray(r.data) ? r.data : []
-          } catch {}
-        }
-        if (cancelled || !mapRef.current) return
-        const enriched = applyServerDataToGeoJSON(gj, serverData, clanIdRef.current, userIdRef.current)
-        geojsonRef.current = enriched
-        map.getSource('zones')?.setData(enriched)
-        rebuildMarkers()
-      } finally {
-        refreshingRef.current = false
+        } catch {}
       }
+      if (cancelled || !mapRef.current) return
+      const enriched = applyServerDataToGeoJSON(gj, serverData, clanIdRef.current, userIdRef.current)
+      geojsonRef.current = enriched
+      map.getSource('zones')?.setData(enriched)
+      rebuildMarkers()
     })()
     return () => { cancelled = true }
   }, [refreshKey, rebuildMarkers])
@@ -1587,17 +1664,12 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
   const [zonesError, setZonesError] = useState(false)
   const [targetZone, setTargetZone] = useState('') // for fortify: destination zone id
   const [attackResult, setAttackResult] = useState(null)  // { attacker_rolls, defender_rolls, conquered, ... }
-  const [turn, setTurn] = useState(null)
-  // Contexto del ataque precalculado al abrir el modal: ¿quién defiende la
-  // zona?, ¿cuántas tropas tiene?, ¿tengo alguna zona propia adyacente con
-  // ≥2 tropas desde la que atacar? Así desactivamos "LANZAR OFENSIVA" antes
-  // de que el usuario clique en vano y mostramos info útil DE LA ZONA OBJETIVO
-  // (en vez de mi balance de tropas, que en un modal de ataque no pinta nada).
+  const turn = useTurnPoll()
   const [attackContext, setAttackContext] = useState({
     loaded: false, validOrigins: [], targetDefense: 0, targetOwner: null,
   })
-  // Gate antes de que el backend rechace el round-trip: leemos /turn/ al
-  // abrir el panel y cada 3 s. Si no es mi turno, mostramos un banner y
+  // Gate antes de que el backend rechace el round-trip: leemos /turn/ via
+  // el poller compartido. Si no es mi turno, mostramos un banner y
   // desactivamos el botón de acción (evita 403 silenciosos).
   const isMyTurn = !turn || turn.current_player_id === user?.id
 
@@ -1620,17 +1692,6 @@ function ActionPanel({ kind, zone, onClose, onSuccess, onRefresh }) {
     }
     return () => { cancelled = true }
   }, [kind, zone?.id])
-
-  useEffect(() => {
-    let alive = true
-    const poll = async () => {
-      try { const r = await api.get('/api/v1/turn/'); if (alive) setTurn(r.data) }
-      catch { /* turn poll failures shouldn't block the panel */ }
-    }
-    poll()
-    const id = setInterval(poll, 3000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
 
   // Precarga del contexto de ataque: una sola vez al abrir el modal sobre
   // una zona enemiga. Si luego cambian las zonas (yo conquisto algo nuevo)
@@ -2088,7 +2149,7 @@ function RightPanel({ player, clans, missions, battleHistory, leaderboard, zones
       initial={{ x: 30, opacity: 0 }} animate={{ x: 0, opacity: 1 }} transition={{ delay: 0.1 }}
       // self-start + justify-start → columna ocupa sólo altura de su
       // contenido y tab bar ancla al top (sin hueco muerto arriba).
-      className="col-span-3 flex flex-col justify-start gap-2 self-start"
+      className="col-span-3 w-full flex flex-col justify-start gap-2 self-start"
     >
       {/* Tab bar */}
       <div className="flex gap-1 rounded-xl p-1" style={{ background: 'rgba(255,255,255,0.05)' }}>
@@ -3102,47 +3163,21 @@ function Dashboard({ player, onStartRun, onClaim, claimed, claiming = false, onL
 
           </div>
 
-          {/* Misiones (mini-card del lobby — versión corta) — brand palette */}
-          <div className="rounded-2xl p-4 backdrop-blur-xl border border-white/10"
-            style={{ background: 'rgba(255,255,255,0.04)' }}>
-            <div className="flex items-center gap-2 mb-3">
-              <Target className="w-4 h-4" style={{ color: '#c8ff00' }} />
-              <h3 className="font-display font-bold text-white text-xs uppercase tracking-widest">Misiones</h3>
-            </div>
-            <div className="space-y-2">
-              {[
-                { icon: Footprints, label: 'Camina 5000 pasos', xp: 50, done: player.steps_total >= 5000 },
-                { icon: Crown,      label: 'Conquista 1 zona',  xp: 100, done: false },
-                { icon: Flame,      label: 'Gana 1 batalla',    xp: 75, done: false },
-              ].map(({ icon: Icon, label, xp, done }) => (
-                <div key={label} className={`flex items-center gap-2 text-xs ${done ? 'opacity-40' : ''}`}>
-                  <Icon className="w-3.5 h-3.5 flex-shrink-0" style={{ color: '#c8ff00' }} />
-                  <span className={`flex-1 text-white ${done ? 'line-through' : ''}`}>{label}</span>
-                  <span className="font-bold text-[10px]" style={{ color: '#c8ff00' }}>+{xp}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <RightPanel
+            player={player}
+            clans={clans}
+            missions={missions}
+            battleHistory={battleHistory}
+            leaderboard={leaderboard}
+            zones={zones}
+            loading={loading}
+            onClaimMission={onClaimMission}
+            onBattleResolved={onRefresh}
+          />
 
-          {/* Consejos para runners — carrusel rotativo de 12 tips
-              curados de Big Issue, adidas, Running Channel, Runner's
-              World, etc. Rota cada 8 s y el jugador puede avanzar
-              manualmente pulsando la flecha. */}
+          {/* Consejos para runners — carrusel rotativo de 12 tips */}
           <RunningTipsCarousel />
         </motion.div>
-
-        {/* RIGHT — Tabs: Misiones | Batallas | Top (diseño restaurado) */}
-        <RightPanel
-          player={player}
-          clans={clans}
-          missions={missions}
-          battleHistory={battleHistory}
-          leaderboard={leaderboard}
-          zones={zones}
-          loading={loading}
-          onClaimMission={onClaimMission}
-          onBattleResolved={onRefresh}
-        />
       </main>
 
       {/* ── FOOTER STATS BAR ──
@@ -3366,30 +3401,15 @@ function NameEditor({ fallback }) {
 }
 
 function TurnBanner({ myUserId }) {
-  const [turn, setTurn] = useState(null)
-  useEffect(() => {
-    let alive = true
-    const fetchOnce = async () => {
-      try {
-        const r = await api.get('/api/v1/turn/')
-        if (alive) setTurn(r.data)
-      } catch { /* not wired yet */ }
-    }
-    fetchOnce()
-    const id = setInterval(fetchOnce, 3000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
+  const turn = useTurnPoll()
 
   if (!turn) return null
   const mine = turn.current_player_id === myUserId
-  const names = {
-    'demo-player-001': getNorteName(),
-    'demo-player-002': 'Sur',
-    'demo-player-003': 'Este',
-    'demo-player-004': 'Oeste',
-  }
-  const who = names[turn.current_player_id] || turn.current_player_id.slice(0, 8)
-  const tone = mine ? '#facc15' : '#f43f5e'
+  const p = PLAYERS[turn.current_player_id]
+  const who = turn.current_player_id === 'demo-player-001'
+    ? getNorteName()
+    : (p?.name || turn.current_player_id.slice(0, 8))
+  const tone = mine ? '#facc15' : (p?.color || '#f43f5e')
   return (
     <div
       className="px-4 py-2.5 rounded-full backdrop-blur-xl border bg-black/70 flex items-center gap-2 font-bold text-sm"
@@ -3488,31 +3508,40 @@ function TroopsReadout({ zones = [], currentUserId, myColor = '#facc15' }) {
 }
 
 function EndTurnButton({ myUserId }) {
-  const [turn, setTurn] = useState(null)
+  const turn = useTurnPoll()
   const [busy, setBusy] = useState(false)
-  useEffect(() => {
-    let alive = true
-    const poll = async () => {
-      try { const r = await api.get('/api/v1/turn/'); if (alive) setTurn(r.data) }
-      catch (e) { if (import.meta.env.DEV) console.warn('[turn poll]', e?.message || e) }
-    }
-    poll()
-    const id = setInterval(poll, 3000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
-  if (!turn || turn.current_player_id !== myUserId) return null
-  const end = async () => {
+  const mine = !!turn && turn.current_player_id === myUserId
+
+  const end = useCallback(async () => {
     setBusy(true)
     try { await api.post('/api/v1/turn/end') } finally { setBusy(false) }
-  }
+  }, [])
+
+  // Atajo de teclado: Enter termina el turno cuando es el mío y no hay input con foco.
+  useEffect(() => {
+    if (!mine) return
+    const onKey = (e) => {
+      if (e.key !== 'Enter') return
+      const ae = document.activeElement
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)) return
+      if (busy) return
+      e.preventDefault()
+      end()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mine, busy, end])
+
+  if (!mine) return null
   return (
     <button
       onClick={end} disabled={busy}
+      title="Termina tu turno (Enter)"
       className="px-6 py-2.5 rounded-full bg-white text-black font-bold text-[11px] uppercase tracking-nike-wide
                  hover:bg-neon-lime transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed
                  flex items-center gap-2"
     >
-      {busy ? '...' : (<>Terminar turno <span aria-hidden="true">→</span></>)}
+      {busy ? '...' : (<>Terminar turno <span aria-hidden="true">↵</span></>)}
     </button>
   )
 }
@@ -3522,45 +3551,101 @@ function EndTurnButton({ myUserId }) {
 // por llamada, pausa de 4.5 s) hasta que vuelve mi turno. Así se ve:
 //  - El TurnBanner cambiando: "Turno de Sur" → "Turno de Este" → "Turno de Oeste"
 //  - El mapa repintándose entre bot y bot gracias al onRefresh
-// ─────────────────────────────────────────────────────────────
-// Bot action overlay — animated cards for attack / conquer / fortify
-// ─────────────────────────────────────────────────────────────
-const BOT_PLAYER_COLORS = {
-  'demo-player-002': '#facc15',
-  'demo-player-003': '#06b6d4',
-  'demo-player-004': '#a855f7',
+// Bot action overlay — animated cards, auto-dismiss 4.5 s, max 4 simultaneous
+const META_ACTION = {
+  attack:  { emoji: '⚔️', label: 'ATACA',    glow: '#f43f5e' },
+  conquer: { emoji: '🏴', label: 'CONQUISTA', glow: '#facc15' },
+  fortify: { emoji: '🛡️', label: 'FORTIFICA', glow: '#06b6d4' },
 }
 
-function BattleEventOverlay({ events }) {
-  if (!events || events.length === 0) return null
-  const meta = {
-    attack:  { emoji: '⚔️', label: 'ATACA',    glow: '#f43f5e' },
-    conquer: { emoji: '🏴', label: 'CONQUISTA', glow: '#facc15' },
-    fortify: { emoji: '🛡️', label: 'FORTIFICA', glow: '#06b6d4' },
-  }
+function useReducedMotionCached() {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const handler = (e) => setReduced(e.matches)
+    try { mq.addEventListener('change', handler) }
+    catch { mq.addListener(handler) }
+    return () => {
+      try { mq.removeEventListener('change', handler) }
+      catch { mq.removeListener(handler) }
+    }
+  }, [])
+  return reduced
+}
+
+const BattleEventOverlay = React.memo(BattleEventOverlayImpl)
+function BattleEventOverlayImpl({ events, mapActionsRef, myUserId }) {
+  const [queue, setQueue] = useState([])
+  const seenRef = useRef(new Set())
+  const reduceMotion = useReducedMotionCached()
+
+  useEffect(() => {
+    if (!events || events.length === 0) return
+    const fresh = events.filter(ev => ev._key && !seenRef.current.has(ev._key))
+    if (fresh.length === 0) return
+    fresh.forEach(ev => seenRef.current.add(ev._key))
+    setQueue(q => [...q, ...fresh].slice(-4))
+    const actions = mapActionsRef?.current
+    if (!actions) return
+    fresh.forEach((ev, i) => {
+      const zoneId = ev.zone_id
+      if (!zoneId) return
+      const color = PLAYERS[ev.bot]?.color || '#ffffff'
+      setTimeout(() => {
+        try {
+          actions.flyToZone?.(zoneId, { zoom: 14.2, duration: 750 })
+          actions.pulseZone?.(zoneId, { color, duration: 2200 })
+        } catch {}
+      }, i * 250)
+    })
+  }, [events, mapActionsRef])
+
+  useEffect(() => {
+    if (queue.length === 0) return
+    const oldest = queue[0]
+    const t = setTimeout(() => {
+      setQueue(q => q.filter(ev => ev._key !== oldest._key))
+    }, 4500)
+    return () => clearTimeout(t)
+  }, [queue])
+
+  useEffect(() => {
+    if (queue.length === 0) seenRef.current = new Set()
+  }, [queue])
+
+  if (queue.length === 0) return null
   return (
-    <div className="absolute left-4 bottom-36 z-30 flex flex-col gap-2 max-w-[250px] pointer-events-none">
-      <AnimatePresence>
-        {events.map((ev, i) => {
-          const m = meta[ev.action] || { emoji: '•', label: ev.action.toUpperCase(), glow: '#fff' }
-          const botColor = BOT_PLAYER_COLORS[ev.bot] || '#fff'
+    <div
+      className="absolute right-4 bottom-28 z-30 flex flex-col gap-2 max-w-[280px] pointer-events-none"
+      role="status" aria-live="polite" aria-label="Acciones de los bots"
+    >
+      <AnimatePresence initial={false}>
+        {queue.map((ev) => {
+          const m = META_ACTION[ev.action] || { emoji: '•', label: String(ev.action || '').toUpperCase(), glow: '#fff' }
+          const botColor = PLAYERS[ev.bot]?.color || '#fff'
+          const attacksMe = ev.owner_user_id === myUserId && (ev.action === 'attack' || ev.action === 'conquer')
           return (
             <motion.div
-              key={ev._key || `${ev.bot}-${ev.action}-${ev.zone_id}-${i}`}
-              initial={{ opacity: 0, x: -50, scale: 0.85 }}
-              animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: -50, scale: 0.85 }}
-              transition={{ type: 'spring', damping: 22, stiffness: 260, delay: i * 0.1 }}
-              className="rounded-2xl px-3 py-2.5 backdrop-blur-xl border"
+              key={ev._key}
+              layout
+              initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 40, scale: 0.9 }}
+              animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0, scale: 1 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: 40, scale: 0.9 }}
+              transition={reduceMotion ? { duration: 0.15 } : { type: 'spring', damping: 22, stiffness: 260 }}
+              className="relative rounded-2xl px-3 py-2.5 backdrop-blur-xl border overflow-hidden"
               style={{
                 background: `${m.glow}14`,
-                borderColor: `${m.glow}50`,
-                boxShadow: `0 0 18px ${m.glow}22`,
+                borderColor: attacksMe ? `${m.glow}cc` : `${m.glow}50`,
+                boxShadow: attacksMe ? `0 0 26px ${m.glow}55` : `0 0 18px ${m.glow}22`,
               }}
             >
               <div className="flex items-center gap-1.5 mb-1">
-                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: botColor }} />
-                <span className="font-bold text-[10px] uppercase tracking-widest" style={{ color: botColor }}>
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: botColor, boxShadow: `0 0 6px ${botColor}` }} />
+                <span className="font-bold text-[10px] uppercase tracking-widest truncate" style={{ color: botColor }}>
                   {ev.botName}
                 </span>
                 <span className="ml-auto text-[10px] font-black px-1.5 py-0.5 rounded-full"
@@ -3573,10 +3658,14 @@ function BattleEventOverlay({ events }) {
                   {ev.from_zone_name && <span className="text-white/55">{ev.from_zone_name} </span>}
                   <span className="text-white/35">→ </span>
                   <span className="font-bold" style={{ color: m.glow }}>{ev.zone_name}</span>
+                  {attacksMe && <span className="ml-1 text-[9px] font-black text-white bg-rose-600/90 px-1.5 py-0.5 rounded-full">¡TE ATACA!</span>}
                 </div>
               )}
               {ev.action === 'conquer' && (
-                <div className="text-[11px] font-bold" style={{ color: m.glow }}>{ev.zone_name}</div>
+                <div className="text-[11px] font-bold" style={{ color: m.glow }}>
+                  {ev.zone_name}
+                  {attacksMe && <span className="ml-1 text-[9px] font-black text-white bg-rose-600/90 px-1.5 py-0.5 rounded-full">¡TE LA QUITA!</span>}
+                </div>
               )}
               {ev.action === 'fortify' && (
                 <div className="text-[11px]">
@@ -3586,6 +3675,14 @@ function BattleEventOverlay({ events }) {
                   )}
                 </div>
               )}
+              {/* Barra de vida de la tarjeta — 4.5 s fading */}
+              <motion.div
+                initial={{ scaleX: 1 }}
+                animate={{ scaleX: 0 }}
+                transition={{ duration: 4.5, ease: 'linear' }}
+                className="absolute left-0 bottom-0 h-[2px] origin-left"
+                style={{ background: m.glow, width: '100%', opacity: 0.55 }}
+              />
             </motion.div>
           )
         })}
@@ -3594,87 +3691,39 @@ function BattleEventOverlay({ events }) {
   )
 }
 
-function ResetGameButton({ onRefresh }) {
-  const [loading, setLoading] = useState(false)
-  const [confirm, setConfirm] = useState(false)
-
-  const handleReset = async () => {
-    if (!confirm) { setConfirm(true); setTimeout(() => setConfirm(false), 3000); return }
-    setLoading(true); setConfirm(false)
-    try {
-      await api.post('/api/v1/turn/setup')
-      onRefresh?.()
-    } catch (e) {
-      console.error('Reset failed', e)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <motion.button
-      whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-      onClick={handleReset}
-      disabled={loading}
-      className={`flex items-center gap-2 px-4 py-3 rounded-2xl backdrop-blur-xl border font-bold text-sm transition-colors ${
-        confirm
-          ? 'border-red-500/70 bg-red-500/20 text-red-300 animate-pulse'
-          : 'border-white/10 bg-black/70 text-white/60 hover:text-white/90'
-      }`}
-      title="Reiniciar partida"
-    >
-      {loading ? '⏳' : confirm ? '¿Seguro?' : '🔄'} {confirm ? 'Confirmar' : loading ? '' : 'Reiniciar'}
-    </motion.button>
-  )
-}
-
 //  - Resumen de lo que hizo el bot (qué conquistó / atacó / fortificó)
 // En total ~14 s para los 3 bots — Fran dijo "hazlos más lentos para
 // percatarme" así que cadencia cómoda > velocidad.
 function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
-  const [turn, setTurn] = useState(null)
+  const turn = useTurnPoll()
   const [playing, setPlaying] = useState(false)
   const [step, setStep] = useState(0)
   const [currentBot, setCurrentBot] = useState('')
-  // Resumen del último bot que acabó (lo muestro durante la pausa para que
-  // se vea qué hizo antes de que el siguiente entre en escena).
   const [lastSummary, setLastSummary] = useState(null)
-  useEffect(() => {
-    let alive = true
-    const poll = async () => {
-      try { const r = await api.get('/api/v1/turn/'); if (alive) setTurn(r.data) }
-      catch { /* el banner ya avisa si /turn/ cae */ }
-    }
-    poll()
-    const id = setInterval(poll, 3000)
-    return () => { alive = false; clearInterval(id) }
-  }, [])
-
-  const names = {
-    'demo-player-001': getNorteName(), 'demo-player-002': 'Sur',
-    'demo-player-003': 'Este',         'demo-player-004': 'Oeste',
-  }
   const isMyTurn = turn && turn.current_player_id === myUserId
 
-  const run = async () => {
+  const run = useCallback(async () => {
     if (playing) return
     setPlaying(true); setStep(0); setLastSummary(null)
     const sleep = (ms) => new Promise(r => setTimeout(r, ms))
     try {
-      // Max 5 iteraciones como red de seguridad por si el backend nunca
-      // devolviera el turno al usuario (no debería, pero vale más pecar).
       for (let i = 0; i < 5; i++) {
         const tRes = await api.get('/api/v1/turn/')
         const curr = tRes.data
         if (curr?.current_player_id === myUserId) break
-        const botName = names[curr.current_player_id] || 'bot'
+        const botName = PLAYERS[curr.current_player_id]?.name || 'bot'
         setCurrentBot(botName)
         setStep(i + 1)
         const simRes = await api.post('/api/v1/simulate_bots/run', { mode: 'step', actions_per_bot_turn: 15 })
-        await onRefresh?.()
-        // Monto el "X conquistó N, atacó N, fortificó N" del summary del
-        // backend para que se vea durante la pausa de 4.5 s.
         const played = simRes?.data?.turns_played?.[0]
+        // Emit overlay events BEFORE refresh so map state is updated after
+        if (played?.actions) {
+          const evs = played.actions
+            .filter(a => a.action !== 'idle')
+            .map((a, idx) => ({ ...a, botName, bot: played.bot, _key: `${Date.now()}-${idx}` }))
+          if (evs.length > 0) onBattleEvents?.(evs)
+        }
+        await onRefresh?.()
         if (played?.summary) {
           const s = played.summary
           const parts = []
@@ -3683,35 +3732,23 @@ function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
           if (s.fortify) parts.push(`${s.fortify} fort.`)
           setLastSummary({ bot: botName, text: parts.join(' · ') || 'sin acciones' })
         }
-        // Emit overlay events for ALL non-idle actions (attack, conquer, fortify)
-        if (played?.actions) {
-          const evs = played.actions
-            .filter(a => a.action !== 'idle')
-            .map((a, idx) => ({ ...a, botName, bot: played.bot, _key: `${Date.now()}-${idx}` }))
-          if (evs.length > 0) onBattleEvents?.(evs)
-        }
-        await sleep(8000)
+        const actionCount = played?.actions?.filter(a => a.action !== 'idle').length ?? 0
+        const botDuration = Math.max(3000, Math.min(8000, 3000 + actionCount * 400))
+        await sleep(botDuration)
       }
     } catch (e) {
       if (import.meta.env.DEV) console.warn('[simulate bots]', e?.message || e)
     } finally {
       setPlaying(false); setStep(0); setCurrentBot(''); setLastSummary(null)
-      // Refresh final por si la última iteración no alcanzó a repintar
-      // (p. ej. salto del for por current_player_id === myUserId).
       try { await onRefresh?.() } catch { /* ignore */ }
     }
-  }
+  }, [playing, myUserId, onRefresh, onBattleEvents])
 
-  // Siempre apunta a la versión más reciente de run y playing sin
-  // añadirlos como dependencias en el efecto de auto-disparo.
   const runRef = useRef(run)
   runRef.current = run
   const playingRef = useRef(playing)
   playingRef.current = playing
 
-  // Auto-disparo: solo cuando isMyTurn pasa de true → false (el usuario
-  // acaba de terminar su turno). Evita el bug de mount donde isMyTurn=false
-  // (null inicial) disparaba los bots nada más cargar el mapa.
   const prevIsMyTurnRef = useRef(null)
   useEffect(() => {
     const prev = prevIsMyTurnRef.current
@@ -3722,29 +3759,21 @@ function SimulateBotsButton({ myUserId, onRefresh, onBattleEvents }) {
     return () => clearTimeout(t)
   }, [isMyTurn])
 
-  // Estado: oculto mientras no sé de quién es el turno. Si es mi turno
-  // deshabilito con texto claro; si no, habilito para que corran los bots.
   if (!turn) return null
-  const disabled = playing || isMyTurn
-  // El label cambia en 2 estados dentro de una iteración:
-  //  - Mientras espera la respuesta del backend → "Jugando Sur…" (sin resumen
-  //    aún, o resumen del bot anterior con nombre distinto al currentBot).
-  //  - Tras volver el simulate_bots → lastSummary.bot === currentBot, enseño
-  //    lo que ese bot acabó de hacer durante los 4.5 s de pausa.
+  if (isMyTurn && !playing) return null
+  const disabled = playing
   const showSummary = lastSummary && lastSummary.bot === currentBot
   const label = playing
     ? (showSummary
         ? `✓ ${currentBot}: ${lastSummary.text} (${step}/3)`
         : `Jugando ${currentBot}… (${step}/3)`)
-    : isMyTurn
-      ? '🎯 Es tu turno — juégalo y termínalo'
-      : '🤖 Jugar turnos de bots'
+    : '🤖 Jugar turnos de bots'
   return (
     <button
       type="button"
       onClick={run}
       disabled={disabled}
-      title={isMyTurn ? 'Termina tu turno primero para que jueguen los bots.' : 'Los bots juegan uno a uno hasta que vuelva tu turno.'}
+      title="Los bots juegan uno a uno hasta que vuelva tu turno."
       className="px-4 py-2.5 rounded-full font-bold text-[11px] uppercase tracking-nike-wide
                  transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed
                  flex items-center gap-2 border"
@@ -3814,23 +3843,70 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
   // NeonMap rellena este ref en su efecto de init.
   const mapActionsRef = useRef(null)
 
-  // Contadores del mapa (86 zonas totales en v3):
-  //   myZones    = las que posee este jugador (15 al empezar)
-  //   enemyZones = las que poseen los otros 3 jugadores (45 al empezar)
-  //   freeZones  = zonas sin dueño (26 libres para reclamar)
+  const [adjacencyMap, setAdjacencyMap] = useState(null)
+  const turn = useTurnPoll()
+
+  // Contadores del mapa (86 zonas totales en v3)
   const myZones = zones.filter(z => z.owner_clan_id === currentUserId).length
   const conqueredZones = zones.filter(z => z.owner_clan_id).length
   const enemyZones = conqueredZones - myZones
   const freeZones = zones.filter(z => !z.owner_clan_id).length
 
-  // Color del jugador actual (mismos mapping que el Lobby)
-  const PLAYER_COLORS = {
-    'demo-player-001': '#f43f5e',  // Norte (magenta)
-    'demo-player-002': '#facc15',  // Sur (lime)
-    'demo-player-003': '#06b6d4',  // Este (cyan)
-    'demo-player-004': '#a855f7',  // Oeste (purple)
-  }
-  const myColor = PLAYER_COLORS[currentUserId] || '#facc15'
+  const myColor = PLAYERS[currentUserId]?.color || '#facc15'
+
+  const myZoneIds = React.useMemo(
+    () => new Set(zones.filter(z => z.owner_clan_id === currentUserId).map(z => z.id)),
+    [zones, currentUserId],
+  )
+
+  const selectedIsConquistable = React.useMemo(() => {
+    if (!selected || !adjacencyMap) return false
+    const adj = adjacencyMap[selected.id] ?? []
+    return adj.some(id => myZoneIds.has(id))
+  }, [selected, adjacencyMap, myZoneIds])
+
+  // Load adjacency map once on mount
+  useEffect(() => {
+    api.get('/api/v1/zones/adjacency').then(r => setAdjacencyMap(r.data)).catch(() => {})
+  }, [])
+
+  // Bump mapRefreshKey when zones prop changes (parent re-fetched)
+  const prevZonesRef = useRef(zones)
+  useEffect(() => {
+    if (prevZonesRef.current !== zones) {
+      prevZonesRef.current = zones
+      setMapRefreshKey(k => k + 1)
+    }
+  }, [zones])
+
+  // Re-sync selected zone data when zones refreshes
+  useEffect(() => {
+    if (!selected) return
+    const fresh = zones.find(z => z.id === selected.id)
+    if (fresh) setSelected(fresh)
+  }, [zones]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keyboard shortcuts: Escape closes any open panel
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setActionPanel(null)
+        setSelected(null)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Auto-recenter on turn return (isMyTurn goes false → true)
+  const prevIsMyTurnRef = useRef(null)
+  useEffect(() => {
+    const isMyTurn = turn?.current_player_id === currentUserId
+    if (prevIsMyTurnRef.current === false && isMyTurn === true) {
+      mapActionsRef.current?.flyToMyZones?.()
+    }
+    prevIsMyTurnRef.current = isMyTurn
+  }, [turn, currentUserId])
 
   const handleSuccess = () => {
     setActionPanel(null)
@@ -4049,7 +4125,6 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
           <EnvironmentBanner />
           <EndTurnButton myUserId={currentUserId} />
           <SimulateBotsButton myUserId={currentUserId} onRefresh={refreshData} onBattleEvents={setBattleEvents} />
-          <ResetGameButton onRefresh={refreshData} />
 
           {/* Botón historial de batallas */}
           <motion.button
@@ -4137,8 +4212,8 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
               </div>
             </div>
 
-            {/* Conquistar — shown only for free zones when user is in a clan */}
-            {!selected.owner_clan_id && currentClanId && (
+            {/* Conquistar — shown only when zone is adjacent to an own zone */}
+            {selectedIsConquistable && !selected.owner_clan_id && (
               <div className="px-6 pb-4">
                 <motion.button
                   whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
@@ -4160,8 +4235,8 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
             {/* Action buttons */}
             <div className="px-6 pb-8 grid grid-cols-3 gap-3">
               {[
-                { key: 'deploy',  label: 'Desplegar', Icon: Send,   color: '#facc15', bg: 'rgba(202,255,51,0.10)',  disabled: false },
-                { key: 'attack',  label: 'Atacar',    Icon: Swords, color: '#f43f5e', bg: 'rgba(255,45,146,0.10)', disabled: selected.isMine },
+                { key: 'deploy',  label: 'Desplegar', Icon: Send,   color: '#facc15', bg: 'rgba(202,255,51,0.10)',  disabled: !selected.isMine },
+                { key: 'attack',  label: 'Atacar',    Icon: Swords, color: '#f43f5e', bg: 'rgba(255,45,146,0.10)', disabled: selected.isMine || !selected.owner_clan_id },
                 { key: 'fortify', label: 'Fortificar', Icon: Shield, color: '#06b6d4', bg: 'rgba(0,240,255,0.10)',  disabled: !selected.isMine },
               ].map(({ key, label, Icon, color, bg, disabled }) => (
                 <motion.button key={key}
@@ -4284,7 +4359,7 @@ function MapView({ onBack, currentClanId, currentUserId, refreshData, zones = []
       </AnimatePresence>
 
       {/* ── Bot action overlay ── */}
-      <BattleEventOverlay events={battleEvents} />
+      <BattleEventOverlay events={battleEvents} mapActionsRef={mapActionsRef} myUserId={currentUserId} />
 
       <motion.button
         type="button"
@@ -4434,20 +4509,26 @@ export default function UrbanPacer() {
   }, [token, setUser, pushToast])
   useEffect(() => { refreshDataRef.current = refreshData }, [refreshData])
 
-  // Refresca el historial de batallas cada 15 s sin relanzar el fetch completo
+  // Debounced refresh: coalesces rapid WS events into one fetch
+  const requestRefreshTimer = useRef(null)
+  const requestRefresh = useCallback(() => {
+    clearTimeout(requestRefreshTimer.current)
+    requestRefreshTimer.current = setTimeout(() => refreshDataRef.current?.(), 800)
+  }, [])
+
+  // Refresca el historial de batallas cada 15 s (always when token exists)
   useEffect(() => {
     if (!token) return
     const poll = async () => {
-      const clanId = user?.clan_id
-      if (!clanId) return
       try {
         const r = await api.get('/api/v1/battles/history')
         if (Array.isArray(r.data)) setBattleHistory(r.data)
       } catch {}
     }
+    poll()
     const id = setInterval(poll, 15000)
     return () => clearInterval(id)
-  }, [token, user?.clan_id])
+  }, [token])
 
   // #1 — WebSocket cableado como invalidador del estado global
   const handleWsMessage = useCallback((msg) => {
@@ -4459,7 +4540,7 @@ export default function UrbanPacer() {
       case 'battle_resolved':
       case 'armies_placed':
       case 'armies_fortified':
-        refreshDataRef.current?.()
+        requestRefresh()
         break
       case 'location_ack': {
         const z = msg.zone
@@ -4478,7 +4559,7 @@ export default function UrbanPacer() {
         // unhandled — silencio controlado
         break
     }
-  }, [pushToast])
+  }, [pushToast, requestRefresh])
   const { status: wsStatus, sendMessage: sendWs } = useWebSocket(user?.id, handleWsMessage)
 
   useEffect(() => {
