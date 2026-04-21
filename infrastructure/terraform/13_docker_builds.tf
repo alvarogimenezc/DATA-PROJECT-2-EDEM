@@ -52,6 +52,7 @@ resource "null_resource" "image_frontend" {
   triggers = {
     dockerfile = filemd5("${local.repo_root}/frontend/Dockerfile")
     package    = filemd5("${local.repo_root}/frontend/package.json")
+    api_url    = google_cloud_run_v2_service.api.uri
   }
 
   provisioner "local-exec" {
@@ -59,7 +60,10 @@ resource "null_resource" "image_frontend" {
     interpreter = ["bash", "-c"]
   }
 
-  depends_on = [google_artifact_registry_repository.cloudrisk]
+  depends_on = [
+    google_artifact_registry_repository.cloudrisk,
+    google_cloud_run_v2_service.api,
+  ]
 }
 
 # =============================================================================

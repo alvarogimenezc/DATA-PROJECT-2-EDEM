@@ -116,7 +116,7 @@ def _seed_demo_players_firestore() -> None:
     """
     try:
         from datetime import datetime
-        from passlib.context import CryptContext
+        import bcrypt as _bcrypt
         from google.cloud import firestore
         from cloudrisk_api.configuracion import settings
 
@@ -126,7 +126,6 @@ def _seed_demo_players_firestore() -> None:
             {"id": "demo-player-003", "name": "Comandante Este",  "email": "este@cloudrisk.app",  "password": "demo1234", "gold": 500},
             {"id": "demo-player-004", "name": "Comandante Oeste", "email": "oeste@cloudrisk.app", "password": "demo1234", "gold": 500},
         ]
-        pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
         db = firestore.Client(project=os.environ.get("PROJECT_ID", "cloudrisk-local"))
         col = settings.FIRESTORE_COLLECTION_USERS
         created = 0
@@ -138,7 +137,7 @@ def _seed_demo_players_firestore() -> None:
                 "id": p["id"],
                 "name": p["name"],
                 "email": p["email"],
-                "hashed_password": pwd_ctx.hash(p["password"]),
+                "hashed_password": _bcrypt.hashpw(p["password"].encode(), _bcrypt.gensalt()).decode(),
                 "clan_id": None,
                 "steps_total": 0,
                 "power_points": 0,
