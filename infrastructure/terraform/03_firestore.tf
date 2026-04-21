@@ -29,9 +29,13 @@ resource "google_firestore_database" "cloudrisk" {
   # (El otro modo, DATASTORE_MODE, es el legacy de App Engine — nunca.)
   type = "FIRESTORE_NATIVE"
 
-  # Protege contra borrado accidental. Para destruir el database hay que
-  # poner este flag en "DELETE_PROTECTION_DISABLED" primero. Lifesaver.
-  delete_protection_state = "DELETE_PROTECTION_ENABLED"
+  # En produccion real conviene "DELETE_PROTECTION_ENABLED" para evitar
+  # borrados accidentales, pero entonces `terraform destroy` falla con
+  # "cannot delete database ... delete_protection_state is ENABLED" y
+  # deja el ciclo apply->destroy roto. Lo dejamos DISABLED para que el
+  # ejercicio sea reproducible; el backend normal de Firestore ya tiene
+  # PITR activo como red de seguridad.
+  delete_protection_state = "DELETE_PROTECTION_DISABLED"
 
   # PITR (Point-in-Time Recovery): guarda snapshots de los ultimos 7 dias.
   # Si un bug borra documentos, podemos hacer time-travel al estado de

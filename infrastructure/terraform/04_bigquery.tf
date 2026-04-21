@@ -55,7 +55,13 @@ resource "google_bigquery_table" "environmental_factors" {
   dataset_id = google_bigquery_dataset.cloudrisk.dataset_id
   table_id   = "environmental_factors"
 
-  deletion_protection = true # No se puede borrar accidentalmente
+  # `deletion_protection=true` impide que `terraform destroy` funcione sin un
+  # apply previo que lo ponga en false: Terraform llama a BQ con el flag en
+  # true y BQ responde "cannot destroy ... without setting deletion_protection
+  # =false and running terraform apply". Como queremos que el ciclo
+  # apply->destroy sea limpio, lo dejamos en false; el dataset padre tiene
+  # `delete_contents_on_destroy = false` como red de seguridad.
+  deletion_protection = false
 
   time_partitioning {
     type  = "DAY"
