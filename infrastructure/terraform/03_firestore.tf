@@ -15,35 +15,8 @@
 # │ concurrente sin bloquear, sin migraciones de schema, pago por lectura.  │
 # └─────────────────────────────────────────────────────────────────────────┘
 
-resource "google_firestore_database" "cloudrisk" {
-  # name = "(default)" crea el database PRIMARIO. Es el unico que puede
-  # leerse con `firestore.Client()` sin especificar nombre — util para que
-  # todo el equipo apunte al mismo sin codigo distinto por persona.
-  name = "(default)"
-
-  # Multi-region EUR3 (Belgica + Paises Bajos + Finlandia) para HA real.
-  # Para dev un single-region (europe-west1) basta y es mas barato.
-  location_id = "eur3"
-
-  # FIRESTORE_NATIVE: API moderna, lo que usamos.
-  # (El otro modo, DATASTORE_MODE, es el legacy de App Engine — nunca.)
-  type = "FIRESTORE_NATIVE"
-
-  # En produccion real conviene "DELETE_PROTECTION_ENABLED" para evitar
-  # borrados accidentales, pero entonces `terraform destroy` falla con
-  # "cannot delete database ... delete_protection_state is ENABLED" y
-  # deja el ciclo apply->destroy roto. Lo dejamos DISABLED para que el
-  # ejercicio sea reproducible; el backend normal de Firestore ya tiene
-  # PITR activo como red de seguridad.
-  delete_protection_state = "DELETE_PROTECTION_DISABLED"
-
-  # PITR (Point-in-Time Recovery): guarda snapshots de los ultimos 7 dias.
-  # Si un bug borra documentos, podemos hacer time-travel al estado de
-  # "hace 3 horas". Cuesta ~0.01 EUR/mes con nuestros 200KB de datos.
-  point_in_time_recovery_enablement = "POINT_IN_TIME_RECOVERY_ENABLED"
-
-  depends_on = [google_project_service.apis]
-}
+# La base de datos Firestore (default) la crea GCP automáticamente al
+# activar la API y no puede eliminarse — no se gestiona con Terraform.
 
 # NOTA: los DOCUMENTOS (datos) NO se crean con Terraform — los creamos con
 # `python scripts/sembrar_firestore.py` despues del apply. Terraform es para

@@ -28,7 +28,7 @@ output "artifact_registry" {
 
 output "firestore_database" {
   description = "Nombre del database Firestore (siempre '(default)')"
-  value       = google_firestore_database.cloudrisk.name
+  value       = "(default)"
 }
 
 output "bigquery_dataset" {
