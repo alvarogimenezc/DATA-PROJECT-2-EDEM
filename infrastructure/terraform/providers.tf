@@ -2,7 +2,7 @@
 # │ providers.tf                                                            │
 # │                                                                         │
 # │ Aqui le decimos a Terraform:                                            │
-# │   1) Que version de Terraform queremos (>= 1.8)                         │
+# │   1) Que version de Terraform queremos (>= 1.5)                         │
 # │   2) Que "proveedor de nube" vamos a usar (Google Cloud)                │
 # │   3) Donde se guarda el STATE (gs://... en Google Cloud Storage)        │
 # │                                                                         │
@@ -15,7 +15,7 @@
 # └─────────────────────────────────────────────────────────────────────────┘
 
 terraform {
-  required_version = ">= 1.8"
+  required_version = ">= 1.5"
 
   required_providers {
     google = {
