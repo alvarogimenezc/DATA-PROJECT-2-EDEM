@@ -79,6 +79,17 @@ resource "google_storage_bucket_iam_member" "dataflow_bucket_admin" {
   member = "serviceAccount:${google_service_account.dataflow.email}"
 }
 
+# Los workers tiran de la imagen del pipeline (dataflow-unified:latest) desde
+# Artifact Registry. Sin este rol el contenedor no se descarga y el job cae
+# con JOB_STATE_FAILED nada mas arrancar.
+resource "google_artifact_registry_repository_iam_member" "dataflow_image_pull" {
+  project    = var.project_id
+  location   = var.region
+  repository = google_artifact_registry_repository.cloudrisk.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.dataflow.email}"
+}
+
 # ─── Flex Template Job ───────────────────────────────────────────────────────
 # El template se construye fuera de Terraform con:
 #
@@ -129,6 +140,7 @@ resource "google_dataflow_flex_template_job" "unified" {
     google_project_iam_member.dataflow_firestore,
     google_project_iam_member.dataflow_pubsub,
     google_storage_bucket_iam_member.dataflow_bucket_admin,
+    google_artifact_registry_repository_iam_member.dataflow_image_pull,
     google_bigquery_table.player_scoring_events,
     google_bigquery_table.dead_letter,
     null_resource.dataflow_flex_template,

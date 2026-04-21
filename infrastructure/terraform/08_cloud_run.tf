@@ -152,6 +152,11 @@ resource "google_cloud_run_v2_job" "air_ingestor" {
       }
     }
   }
+
+  depends_on = [
+    google_project_service.apis,
+    null_resource.image_air_ingestor,
+  ]
 }
 
 # =============================================================================
@@ -195,6 +200,11 @@ resource "google_cloud_run_v2_job" "weather_ingestor" {
       }
     }
   }
+
+  depends_on = [
+    google_project_service.apis,
+    null_resource.image_weather_ingestor,
+  ]
 }
 
 # =============================================================================
