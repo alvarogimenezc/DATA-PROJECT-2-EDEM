@@ -56,7 +56,7 @@ resource "null_resource" "image_frontend" {
   }
 
   provisioner "local-exec" {
-    command     = "docker buildx build --platform linux/amd64 --provenance=false --push -t ${local.registry}/frontend:latest ${local.repo_root}/frontend"
+    command     = "docker buildx build --platform linux/amd64 --provenance=false --push --build-arg VITE_API_URL=${google_cloud_run_v2_service.api.uri} --build-arg VITE_WS_URL=${replace(google_cloud_run_v2_service.api.uri, "https://", "wss://")} -t ${local.registry}/frontend:latest ${local.repo_root}/frontend"
     interpreter = ["bash", "-c"]
   }
 

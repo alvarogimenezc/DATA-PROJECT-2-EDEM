@@ -49,6 +49,12 @@ resource "google_project_iam_member" "dataflow_worker" {
   member  = "serviceAccount:${google_service_account.dataflow.email}"
 }
 
+resource "google_project_iam_member" "dataflow_developer" {
+  project = var.project_id
+  role    = "roles/dataflow.developer"
+  member  = "serviceAccount:${google_service_account.dataflow.email}"
+}
+
 resource "google_project_iam_member" "dataflow_bq_editor" {
   project = var.project_id
   role    = "roles/bigquery.dataEditor"
@@ -135,6 +141,7 @@ resource "google_dataflow_flex_template_job" "unified" {
 
   depends_on = [
     google_project_iam_member.dataflow_worker,
+    google_project_iam_member.dataflow_developer,
     google_project_iam_member.dataflow_bq_editor,
     google_project_iam_member.dataflow_bq_jobuser,
     google_project_iam_member.dataflow_firestore,
