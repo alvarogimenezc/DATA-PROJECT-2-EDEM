@@ -6,13 +6,8 @@ const COOLDOWN_MS = 6 * 60 * 60 * 1000
 
 const REWARDS = [
   { icon: '⚔️', label: 'Tropas de refuerzo', steps: 800 },
-<<<<<<< Front_Ricardo
-  { icon: '👣', label: 'Marcha de campaña', steps: 1200 },
-  { icon: '🪖', label: 'Batallón de élite', steps: 600 },
-=======
   { icon: '🏃', label: 'Marcha de campaña', steps: 1200 },
   { icon: '💪', label: 'Batallón de élite', steps: 600 },
->>>>>>> main
   { icon: '⭐', label: 'Gloria de batalla', steps: 1500 },
   { icon: '🎯', label: 'Patrulla de exploración', steps: 500 },
 ]
@@ -34,20 +29,14 @@ export default function RewardChest({ onRewardClaimed }) {
 
   const isAvailable = remainingMs <= 0
 
-<<<<<<< Front_Ricardo
-=======
   // Run interval only while on cooldown; restart only when availability flips
->>>>>>> main
   useEffect(() => {
     if (isAvailable) return
     const interval = setInterval(() => setRemainingMs(getRemainingMs()), 1000)
     return () => clearInterval(interval)
   }, [isAvailable])
 
-<<<<<<< Front_Ricardo
-=======
   // Cleanup dismiss timeout on unmount
->>>>>>> main
   useEffect(() => () => clearTimeout(dismissRef.current), [])
 
   const handleClaim = async () => {

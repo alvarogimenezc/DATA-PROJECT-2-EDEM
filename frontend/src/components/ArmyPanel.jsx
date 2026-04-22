@@ -47,11 +47,8 @@ export default function ArmyPanel({ onClose, selectedZone, onDeployed }) {
     setSuccess('')
     setLoading(true)
     try {
-<<<<<<< Front_Ricardo
-=======
       // Contract endpoint: accepts both 'amount' (legacy) and 'armies' (contract).
       // player_id is inferred from JWT sub when not in body.
->>>>>>> main
       const response = await api.post('/api/v1/actions/place', {
         location_id: selectedZone.id,
         armies: safeAmount,
@@ -70,18 +67,11 @@ export default function ArmyPanel({ onClose, selectedZone, onDeployed }) {
   return (
     <div className="panel">
       <div className="panel-header">
-<<<<<<< Front_Ricardo
         <h2>🚩 Refuerzo Táctico</h2>
         <button onClick={onClose}>✕</button>
       </div>
       <div className="panel-body">
-=======
-        <h2>{'\uD83D\uDEA9'} Refuerzo T&aacute;ctico</h2>
-        <button onClick={onClose}>{'\u2715'}</button>
-      </div>
-      <div className="panel-body">
         {/* Balance grid */}
->>>>>>> main
         {balance && (
           <div className="deploy-balance">
             <div className="deploy-metric">
@@ -99,11 +89,7 @@ export default function ArmyPanel({ onClose, selectedZone, onDeployed }) {
           </div>
         )}
 
-<<<<<<< Front_Ricardo
         <div className="ornament">─── ✦ ───</div>
-=======
-        <div className="ornament">{'\u2500\u2500\u2500 \u2726 \u2500\u2500\u2500'}</div>
->>>>>>> main
 
         {!selectedZone ? (
           <p className="empty-msg">
@@ -111,10 +97,7 @@ export default function ArmyPanel({ onClose, selectedZone, onDeployed }) {
           </p>
         ) : (
           <>
-<<<<<<< Front_Ricardo
-=======
             {/* Target zone card */}
->>>>>>> main
             <div className="deploy-target">
               <div className="deploy-target-header">
                 <div>
@@ -129,27 +112,17 @@ export default function ArmyPanel({ onClose, selectedZone, onDeployed }) {
               </div>
               <div className="deploy-target-meta">
                 Tropas: <strong>{Number(selectedZone.total_armies || 0).toLocaleString()}</strong>
-<<<<<<< Front_Ricardo
                 {' · '}
-=======
-                {' \u00b7 '}
->>>>>>> main
                 Valor: <strong>{selectedZone.value || selectedZone.value_score || '?'}</strong>
               </div>
             </div>
 
-<<<<<<< Front_Ricardo
-=======
             {/* Recommendation */}
->>>>>>> main
             <div className="advice-text" style={{ borderLeftColor: 'var(--gold)' }}>
               Sugerencia: empieza con <strong>{suggestedAmount}</strong> tropas para reforzar sin vaciar tu balance.
             </div>
 
-<<<<<<< Front_Ricardo
-=======
             {/* Deploy form */}
->>>>>>> main
             <form onSubmit={deployArmies} style={{ display: 'flex', flexDirection: 'column', gap: '.6rem' }}>
               <div className="create-form">
                 <input
@@ -198,11 +171,7 @@ export default function ArmyPanel({ onClose, selectedZone, onDeployed }) {
                 style={{ background: 'linear-gradient(180deg, var(--army-green) 0%, #1a4a1a 100%)', borderColor: '#145a14' }}
                 disabled={loading || !balance?.armies_available}
               >
-<<<<<<< Front_Ricardo
                 {loading ? 'Desplegando...' : `🚩 Desplegar ${safeAmount} tropas`}
-=======
-                {loading ? 'Desplegando...' : `\uD83D\uDEA9 Desplegar ${safeAmount} tropas`}
->>>>>>> main
               </button>
             </form>
           </>

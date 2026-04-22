@@ -3,13 +3,11 @@ import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
 
-function rollDice(attackerPower, defenderPower) {
-=======
 /**
  * Simulates a Risk-style dice roll with animation.
  * Returns { attackDice: number[], defenseDice: number[], result: 'attacker'|'defender' }
  */
-
+function rollDice(attackerPower, defenderPower) {
   const atkCount = Math.min(3, Math.max(1, Math.ceil(attackerPower / 100)))
   const defCount = Math.min(2, Math.max(1, Math.ceil(defenderPower / 100)))
   const atkDice = Array.from({ length: atkCount }, () => Math.floor(Math.random() * 6) + 1)
