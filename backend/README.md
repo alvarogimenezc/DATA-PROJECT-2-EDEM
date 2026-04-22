@@ -1,86 +1,38 @@
-# Backend — CloudRISK API
+# ⚙️ CloudRISK - Backend (FastAPI)
 
-API REST del juego CloudRISK, construida con **FastAPI** (Python). Expone todos los endpoints que consume el frontend y un WebSocket para eventos en tiempo real.
+Este componente es el corazón de **CloudRISK**. Es una API REST que gestiona toda la lógica del juego: autenticación, conquistas territoriales de Valencia, cálculo de turnos y sincronización en tiempo real vía WebSocket.
 
-## Estructura de carpetas
+## 🚀 Funciones Principales
+* **Gestión de Usuarios y Clanes:** Autenticación por JWT (Bearer token).
+* **Control Territorial (`zonas.py`, `ejercitos.py`):** Lógica de conquista atómica, despliegue de tropas y combate estilo Risk.
+* **Integración Física (`pasos.py`):** Convierte los pasos reales (enviados por Pub/Sub) en poder militar.
+* **Inteligencia Artificial (`simulador.py`, `bot_meta.py`):** Bots que simulan turnos evaluando prioridades tácticas (defensa, ataque, expansión).
+* **WebSocket en Tiempo Real:** Actualizaciones inmediatas al cliente sobre batallas, posiciones y turnos.
 
-```
-backend/
-├── cloudrisk_api/
-│   ├── main.py              ← Punto de entrada FastAPI
-│   ├── configuracion.py     ← Variables de entorno y parámetros del juego
-│   ├── endpoints/           ← Rutas HTTP (cada fichero = un recurso)
-│   ├── services/            ← Lógica de negocio (auth, dados, turnos, WS)
-│   └── database/            ← Acceso a datos (Firestore o memoria)
-├── tests/                   ← Tests con pytest
-├── Dockerfile
-└── requirements.txt
-```
+## 🛠️ Tecnologías
+* **Framework:** FastAPI (Python 3.12) con Uvicorn.
+* **Base de Datos:** Google Cloud Firestore (Producción) o Almacén en Memoria RAM (Desarrollo local).
+* **Mensajería:** Google Cloud Pub/Sub (`google-cloud-pubsub`).
+* **Geometría:** `shapely` (Para calcular adyacencia de los barrios).
 
----
+## ⚙️ Variables de Entorno Clave
+La API lee su configuración de `.env` o variables inyectadas.
 
-## Endpoints
+| Variable | Descripción |
+| :--- | :--- |
+| `USE_LOCAL_STORE` | `1` para usar RAM local, `0` para usar Firestore real. |
+| `PROJECT_ID` | ID de tu proyecto en Google Cloud. |
+| `SECRET_KEY` | Clave secreta para firmar los tokens JWT. |
+| `SCHEDULER_SECRET` | Token de seguridad para los endpoints llamados por Cloud Scheduler. |
+| `PORT` | Puerto de escucha (por defecto 8080). |
 
-Todas las rutas van bajo `/api/v1`. Autenticación por JWT (Bearer token).
+*Nota: Al arrancar, si `USE_LOCAL_STORE=1`, el sistema siembra automáticamente 87 barrios de Valencia y 4 jugadores de demostración para poder jugar sin infraestructura externa.*
 
-| Fichero | Prefijo | Qué hace |
-|---------|---------|----------|
-| `usuarios.py` | `/users` | Registro, login y perfil |
-| `clanes.py` | `/clans` | Crear/unirse/salir de clanes |
-| `zonas.py` | `/zones` | Listar los 87 barrios, conquistar y atacar (dados Risk) |
-| `ejercitos.py` | `/armies` | Desplegar y mover tropas |
-| `turno.py` | `/turn` | Fases del turno: refuerzo → ataque → fortificación |
-| `pasos.py` | `/steps` | Sincronizar pasos reales → generar ejércitos |
-| `misiones.py` | `/missions` | Misiones diarias con recompensas |
-| `multiplicadores.py` | `/multipliers` | Multiplicador ambiental (aire × clima) |
-| `analiticas.py` | `/analytics` | Consultas analíticas a BigQuery |
-| `simulador.py` | `/simulate_bots` | Turno de bots tras `/turn/end` (botón "Simular bots" del lobby) |
-| `compatibilidad_equipo.py` | `/state`, `/actions` | Rutas de compatibilidad con el contrato del equipo |
-| `batallas.py` ⚠️ | `/battles` | Historial + resolución manual/cron (router `deprecated=True`; la ruta canónica de combate es `POST /zones/{id}/attack`) |
+## 📦 Cómo Ejecutarlo
 
-### Eventos WebSocket (`/ws`)
-
-El backend empuja eventos al frontend por WebSocket; el cliente los trata como invalidadores del estado:
-
-- `game_state_update`, `zone_updated`, `turn_changed`
-- `battle_started`, `battle_resolved`
-- `location_update`, `step_update`
-
----
-
-## Servicios
-
-| Fichero | Qué hace |
-|---------|----------|
-| `autenticacion.py` | Genera y valida tokens JWT |
-| `dados.py` | Motor de combate con dados tipo Risk |
-| `estado_juego.py` | Estado del turno actual (jugador, fase) |
-| `gestor_websocket.py` | Gestiona conexiones WebSocket (broadcast y mensajes) |
-| `multiplicadores.py` | Caché del multiplicador ambiental |
-| `adyacencia.py` | Grafo de adyacencia entre barrios (desde GeoJSON) |
-
----
-
-## Capa de datos
-
-Cada módulo de `database/` funciona con **Firestore** en producción o con un **almacén en memoria** en local (`USE_LOCAL_STORE=1`). El cambio es transparente.
-
-| Fichero | Colección / recurso |
-|---------|---------------------|
-| `usuarios.py` | `users` — CRUD de jugadores, hash bcrypt |
-| `clanes.py` | `clans` — CRUD de clanes |
-| `zonas.py` | `zones` — 87 barrios de Valencia, conquista atómica |
-| `batallas.py` | `battles` — batallas (sistema legacy) |
-| `pasos.py` | `step_logs` — historial de pasos sincronizados |
-| `publicador_pubsub.py` | Pub/Sub — publica eventos de pasos, ubicación y batallas |
-| `almacen_en_memoria.py` | Implementación en RAM para desarrollo local |
-
----
-
-## Modos de ejecución
-
-| Modo | Configuración | Datos |
-|------|---------------|-------|
-| **Local (RAM)** | `USE_LOCAL_STORE=1` | En memoria, se reinicia cada vez. Siembra 87 zonas + 4 jugadores demo. |
-| **Emulador Firestore** | `FIRESTORE_EMULATOR_HOST=localhost:8200` | Persiste mientras el contenedor esté vivo. |
-| **GCP producción** | `PROJECT_ID=cloudrisk-492619` + credenciales | Firestore + Pub/Sub + BigQuery reales. |
+**En Local (Modo RAM):**
+```bash
+# Desde la carpeta backend/
+export USE_LOCAL_STORE=1
+pip install -r requirements.txt
+uvicorn cloudrisk_api.main:app --reload --port 8080
