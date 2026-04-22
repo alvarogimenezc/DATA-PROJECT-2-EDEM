@@ -1,54 +1,44 @@
-# Generador de Datos Sintéticos (WalkRisk)
+# 🤖 CloudRISK - Generadores de Datos y Simuladores (WalkRisk)
 
-## 🎯 ¿Para qué sirve esta carpeta?
+Este módulo contiene los scripts de inteligencia artificial y generación de tráfico sintético. Dado que evaluar una arquitectura de Big Data requiere volumen de información, estos simuladores inyectan movimiento físico (GPS) y acciones de juego en el sistema de manera automática.
 
-Esta carpeta contiene los simuladores que hemos creado para el proyecto WalkRisk. Dado que no podemos generar miles de pasos físicos reales para evaluar la arquitectura Cloud, hemos creado scripts que simulan la actividad de varios jugadores en Valencia. 
+## 🚀 Funciones Principales
 
-Con estos scripts generamos eventos (latitud, longitud, velocidad y tiempo) y los inyectamos en nuestro sistema de **Pub/Sub** de Google Cloud para probar que nuestras pipelines de Dataflow y BigQuery funcionan correctamente.
+* **Caminantes GPS (`juego_caminante.py`):** Simula a 4 comandantes paseando de forma realista por los 87 barrios de Valencia. Calcula distancias (Haversine) y envía telemetría de pasos a Google Cloud Pub/Sub.
+* **Bots de Estrategia (`simulacion_multijugador.py` y `simulacion_rapida_juego.py`):** IA que juega partidas completas contra el backend. Evalúa adyacencias, calcula heurísticas de riesgo, refuerza fronteras y realiza conquistas.
+* **Respaldo Local (`recolector_metricas_local.py`):** Un consumidor de Pub/Sub que actúa como plan de contingencia. Descarga los eventos y los guarda en archivos `.jsonl` locales en caso de que el pipeline de Dataflow falle.
+* **Setup de Partida (`tabla_reglas_inicio.py`):** Utilidad que arranca el mapa inicial en Firestore distribuyendo ejércitos basados en el histórico de pasos.
 
-## 📂 Archivos del módulo
+## 🛠️ Tecnologías
+* **Lenguaje:** Python 3.12.
+* **Librerías Clave:** `google-cloud-pubsub` (Mensajería asíncrona), `shapely` (Procesamiento geoespacial), `requests` (Llamadas API).
 
-| Archivo | Qué hace |
-|---|---|
-| `juego_caminante.py` | Simula a 4 personas caminando por los 87 barrios de Valencia; envía los pasos a Pub/Sub. |
-| `bot_ia_riesgo.py` | Inteligencia Artificial para el juego. Simula decisiones de ataque o defensa basadas en los ejércitos disponibles. |
-| `simulacion_rapida_juego.py` | Acelerador de partidas. Lo utilizamos para llenar las bases de datos rápidamente y poder mostrar los Dashboards en las demos. |
-| `recolector_metricas_local.py` | Script de respaldo para guardar los logs de Pub/Sub en local (archivos `.jsonl`) si falla la nube. |
-| `tabla_reglas_inicio.py` | Script que inicializa el mapa de Firestore con los territorios la primera vez que se lanza el juego. |
+## ⚙️ Variables de Entorno Clave
 
+| Variable | Descripción |
+| :--- | :--- |
+| `API_BASE` | URL del backend de CloudRISK (defecto: `http://127.0.0.1:8080`). |
+| `PUBSUB_PROJECT` | ID del proyecto de Google Cloud para el envío de telemetría. |
+| `PUBSUB_TOPIC_MOVEMENTS` | Topic donde se envían los pasos (defecto: `player-movements`). |
+| `CLOUDRISK_LOCAL_METRICS_DIR` | Carpeta de salida para el recolector local (defecto: `/metrics`). |
 
-## 🚀 Cómo ejecutarlo
+## 📦 Cómo Ejecutarlo
 
+**1. Simular partidas rápidas (Bots IA):**
+Ideal para poblar la base de datos de batallas para los dashboards.
 ```bash
-# Walker local apuntando a emulador Pub/Sub (docker compose up debe estar corriendo)
-cd data_generator
-pip install -r requirements.txt
-PUBSUB_EMULATOR_HOST=localhost:8085 python juego_caminante.py --moves 200 --pause 0.08
+# Apuntando al backend local
+python simulacion_rapida_juego.py
 
-# Walker contra Pub/Sub real en GCP
-gcloud auth application-default login
-PROJECT_ID=cloudrisk-492619 python juego_caminante.py
-
-# Bots de IA atacando el backend local
-python bot_ia_riesgo.py --api http://localhost:8080
-
-# Bots contra backend desplegado en Cloud Run
-python bot_ia_riesgo.py --api https://cloudrisk-backend-xxxxx.run.app
-
-# Deploy del Cloud Run Job — build + update manual
-gcloud builds submit data_generator/ \
-  --tag europe-west1-docker.pkg.dev/$PROJECT_ID/cloudrisk/walker:latest
-gcloud run jobs update cloudrisk-walker \
-  --image europe-west1-docker.pkg.dev/$PROJECT_ID/cloudrisk/walker:latest \
-  --region europe-west1
-
-# Disparar el Job ya desplegado
-gcloud run jobs execute cloudrisk-walker --region europe-west1
-```
-## 🚀 Cómo lo ejecutamos para las pruebas
+# Modificar número de partidas y movimientos máximos
+python simulacion_multijugador.py --runs 5 --max-moves 200
 
 1. **Lanzar caminantes locales (para ver cómo funciona GCP):**
 ```bash
 gcloud auth application-default login
-export PROJECT_ID=cloudrisk-492619
-python juego_caminante.py --moves 200
+export PUBSUB_PROJECT=cloudrisk-492619
+python juego_caminante.py --moves 200 --pause 0.12
+
+2. **Ejecutar el Recolector Local con Docker:**
+docker build -t cloudrisk-metrics .
+docker run -v $(pwd)/metrics:/metrics -e CLOUDRISK_LOCAL_METRICS_DIR=/metrics cloudrisk-metrics

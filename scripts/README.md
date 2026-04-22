@@ -1,85 +1,45 @@
-# scripts/
+# 🛠️ CloudRISK - Scripts de Operación y Automatización
 
-## 🎯 Qué hace este directorio
+Este directorio contiene la colección de utilidades, *wrappers* y *seeders* diseñados para simplificar el ciclo de vida del desarrollo, la carga de datos inicial y la ejecución de demostraciones de **CloudRISK**.
 
-Es el **cajón de herramientas** del proyecto. Scripts que no son infra (eso es `infrastructure/`) pero que necesitamos para operar el sistema en dev y demos:
+## 🚀 Funciones Principales
 
-- **Sembrar** Firestore con jugadores, zonas, batallas, balances.
-- **Jugar automáticamente** una partida contra el API para que la demo tenga "chicha".
-- **Sincronizar** el repo local con el repo del equipo en GitHub.
+### 1. Inicialización de Entornos (Bootstrapping)
+Scripts para levantar el entorno local completo (Backend + Emuladores + Datos) con un solo comando, disponibles para múltiples sistemas operativos.
+* **`bootstrap_demo.sh`** / **`bootstrap_demo.ps1`**: Levantan el backend de FastAPI usando los emuladores de GCP (Firestore y Pub/Sub), inyectan los datos semilla y dejan el sistema listo para recibir peticiones.
+* **`setup_local_pubsub.py`**: Configura dinámicamente los *topics* y *subscriptions* requeridos en el emulador local de Pub/Sub.
 
-Todos los scripts "de verdad" están en Python (cross-platform); los `.sh` y `.ps1` son wrappers finos para no tener que recordar el `python scripts/foo.py --flag` completo.
+### 2. Sembrado de Datos (Data Seeding)
+Scripts en Python para poblar bases de datos vacías (locales o en la nube) con el estado inicial del juego.
+* **`sembrar_firestore.py`**: Inyecta los jugadores base, el mapa de zonas de Valencia y la topología básica en Firestore.
+* **`sembrar_demo.py`**: Un script más avanzado que carga un "estado precocinado" (Turno 7, batallas resueltas, territorios repartidos). Ideal para demostraciones de mid-game sin tener que jugar desde cero.
+* **`seed_emulators.sh`**: Wrapper en Bash para invocar los scripts de Python específicamente contra los emuladores locales (`FIRESTORE_EMULATOR_HOST`).
 
-## 🛠️ Lenguajes y tecnologías
+### 3. Simuladores de Tráfico
+* **`play_demo_game.sh`**: Un orquestador que lanza secuencialmente los bots de IA (`juego_caminante.py` o `simulacion_rapida_juego.py`) para generar actividad automatizada y poblar los dashboards en tiempo real.
 
-| Tech | Por qué aquí |
-|---|---|
-| **Python 3.12** | Lenguaje común del equipo. Las librerías GCP (`google-cloud-firestore`, `google-cloud-pubsub`) son first-class aquí. |
-| **Bash (`.sh`)** | Wrapper cómodo en macOS / Linux / WSL / Git Bash. Solo preflight checks + delega al `.py`. |
-| **PowerShell (`.ps1`)** | Equivalente al `.sh` para Windows nativo (Noelia y Martha trabajan así). Mismo resultado, misma flag. |
-| **google-cloud-firestore / pubsub** | Clientes oficiales. Escriben directo a Firestore y publican a los topics. |
+## 🛠️ Tecnologías
 
-**Por qué Python y no todo bash:** el seed tiene que correr en Windows, Mac, Linux y dentro de un Cloud Run Job. Bash no corre en PowerShell sin WSL, y PowerShell no corre en un container Linux. Python sí. Los wrappers `.sh`/`.ps1` existen para que cada teammate invoque el script como está acostumbrado.
+* **Bash / PowerShell:** Para la orquestación agnóstica del sistema operativo.
+* **Python 3.12:** Para la interacción compleja con las APIs de Google Cloud y la manipulación de JSON.
+* **GCP Emulators:** Soporte nativo para `google-cloud-cli` (Firestore y Pub/Sub emulators).
 
-## 📂 Archivos principales
+## ⚙️ Variables de Entorno Clave
 
-| Archivo | Qué hace |
-|---|---|
-| `sembrar_demo.py` | Script principal. Siembra Firestore (4 jugadores, 87 zonas, 38 conquistadas, 3 batallas) + publica 4 mensajes de ejemplo en topics ambientales. Idempotente (`merge=True`). |
-| `bootstrap_demo.sh` | Wrapper bash: verifica Python + gcloud, detecta `$PROJECT_ID`, llama al `.py`. |
-| `bootstrap_demo.ps1` | Equivalente PowerShell para Windows nativo. |
-| `sembrar_firestore.py` | Variante más mínima: solo `players` + `zones` (sin balances ni batallas). Usado por tests. |
-| `seed_emulators.sh` | Llama a `sembrar_demo.py` apuntando a los emuladores locales (`localhost:8200`, `localhost:8085`). |
-| `play_demo_game.sh` | Contra un backend ya corriendo: logea 4 jugadores, registra 2 más, sincroniza pasos, crea clanes "Pink Lions" y "Cyan Wolves", conquista zonas. Para demos en vivo. |
-| `sync_to_team_repo.sh` | Replica cambios de este fork al repo oficial del equipo (`alvarogimenezc/DATA-PROJECT-2-EDEM`). |
+La mayoría de los scripts de sembrado requieren configurar el entorno para distinguir entre desarrollo local y producción.
 
-## 🔗 Cómo se conecta con el resto del proyecto
+| Variable | Descripción |
+| :--- | :--- |
+| `PROJECT_ID` | El identificador del proyecto en GCP (ej. `cloudrisk-492619`). Obligatorio para los scripts de sembrado. |
+| `FIRESTORE_EMULATOR_HOST` | Si está definida (ej. `localhost:8080`), los scripts de Python dirigirán el tráfico al emulador en lugar de a la nube. |
+| `PUBSUB_EMULATOR_HOST` | Igual que el anterior, pero para Pub/Sub. |
 
-```
-scripts/sembrar_demo.py
-          │
-          ├─▶ Firestore   (users, zones, user_balance, location_balance, battles)
-          └─▶ Pub/Sub     (weather-events, airquality-events — 4 mensajes de ejemplo)
+## 📦 Cómo Ejecutarlo
 
-scripts/play_demo_game.sh ──▶ backend/ (HTTP: /auth, /clans, /armies, /zones)
-
-infrastructure/terraform/10_demo_seed.tf ──▶ scripts/sembrar_demo.py (automático tras apply)
-
-Lee de:
-  data/demo_game_state.json         (estado precocinado)
-  data/players.json                 (usuarios demo)
-  backend/cloudrisk_api/...          (constante VALENCIA_ZONES)
-```
-
-**Orden típico tras un `terraform apply`:**
-
-1. `bash scripts/bootstrap_demo.sh cloudrisk-492619` (o `.ps1` en Windows)
-2. `bash scripts/play_demo_game.sh` (solo si quieres estado "a mitad de partida" con clanes)
-3. `python scripts/sembrar_demo.py --project cloudrisk-492619 --dry-run` para confirmar que todo entró (compara contra Firestore sin escribir)
-
-## 🚀 Cómo ejecutarlo
-
+**Para arrancar el entorno de desarrollo local completo:**
 ```bash
-# Seed completo contra Firestore real (requiere gcloud auth application-default login)
-python scripts/sembrar_demo.py --project cloudrisk-492619
+# En Linux/macOS
+./scripts/bootstrap_demo.sh
 
-# Mismo, pero con wrapper (detecta Python, valida gcloud, instala deps mínimas)
-bash scripts/bootstrap_demo.sh cloudrisk-492619
-
-# Windows nativo (PowerShell)
-powershell -File scripts/bootstrap_demo.ps1 -Project cloudrisk-492619
-
-# Contra emulador local (docker compose up debe estar corriendo)
-FIRESTORE_EMULATOR_HOST=localhost:8200 \
-PUBSUB_EMULATOR_HOST=localhost:8085 \
-python scripts/sembrar_demo.py --project cloudrisk-local
-
-# Seed mínimo (solo users + zones) — útil para tests
-python scripts/sembrar_firestore.py --project cloudrisk-492619
-
-# Simular partida en vivo contra un backend ya desplegado
-API=http://localhost:8080 bash scripts/play_demo_game.sh
-
-# Dry-run: qué haría sin tocar Firestore
-python scripts/sembrar_demo.py --project cloudrisk-492619 --dry-run
-```
+# En Windows
+.\scripts\bootstrap_demo.ps1

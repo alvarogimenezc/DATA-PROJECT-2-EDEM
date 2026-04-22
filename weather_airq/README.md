@@ -1,50 +1,36 @@
-# ⛅ CloudRISK — Ingestores Ambientales (Clima y Calidad del Aire)
+# 🌍 CloudRISK - Ingestores Ambientales (Clima y Calidad del Aire)
 
-Esta carpeta contiene dos "reporteros" automáticos (`calidad_aire.py` y `clima.py`). Su misión es asomarse a la ventana cada 30 segundos para ver cómo está Valencia y avisar al juego de CloudRISK.
+Este componente se encarga de extraer datos ambientales en tiempo real (o generarlos de forma sintética) para influir dinámicamente en las mecánicas de juego de **CloudRISK**. Los eventos son enviados a Google Cloud Pub/Sub para que el pipeline unificado los procese.
 
-Dependiendo del tiempo y la contaminación, calculan un **Multiplicador de Ejércitos**.
-* Si hace un día estupendo y el aire es puro = **1.5** (¡Tus ejércitos crecen un 50%!).
-* Si hay tormenta y el aire es tóxico = **0.6** (¡Cuidado, pierdes casi la mitad de tus refuerzos!).
+## 🚀 Funciones Principales
 
----
+* **Ingestor de Clima (`clima.py`):** Consulta la temperatura, humedad y velocidad del viento en Valencia para calcular un `multiplier` de combate (ej. lluvia o viento fuerte penalizan el ataque).
+* **Ingestor de Calidad del Aire (`calidad_aire.py`):** Consulta el índice AQI, PM2.5 y PM10. Una alta contaminación aplica penalizaciones de daño a las tropas.
+* **Modo Mock (Fallback Automático):** Si no se detecta una API Key válida, los scripts generan datos aleatorios realistas para poder seguir probando el juego en local sin depender de servicios externos.
 
-## 🛠️ Los dos reporteros
+## 🛠️ Tecnologías
 
-### 1. `calidad_aire.py`
-Mide el Índice de Calidad del Aire (AQI).
-* **Fórmula:** Penaliza progresivamente a medida que la contaminación sube del nivel 1 al 5.
-* **Mensaje:** Lo envía con la etiqueta `"type": "air_quality"`.
+* **Lenguaje:** Python 3.12.
+* **Librerías Clave:** `requests` (Llamadas API REST) y `google-cloud-pubsub` (Mensajería).
+* **Construcción:** Multi-stage Docker build para generar contenedores independientes y ligeros.
 
-### 2. `clima.py`
-Mide el estado del cielo (Sol, Lluvia, Nieve) y la Temperatura.
-* **Fórmula:** Da puntos base según el cielo (Despejado suma, Tormenta resta). Además, aplica una penalización extra de `-0.2` si hace calor extremo (>35ºC) o mucho frío (<5ºC) porque a las tropas les cuesta marchar.
-* **Mensaje:** Lo envía con la etiqueta `"type": "weather"`.
+## ⚙️ Variables de Entorno
 
----
+Ambos scripts se configuran mediante las siguientes variables:
 
-## 🧪 Cómo probarlos en el portátil 
+| Variable | Descripción |
+| :--- | :--- |
+| `OPENWEATHER_API_KEY` | Tu API Key de OpenWeatherMap. Si se omite, se activa el modo de simulación automática. |
+| `PUBSUB_PROJECT` | ID de tu proyecto en Google Cloud (ej. `cloudrisk-492619`). |
+| `PUBSUB_TOPIC_WEATHER` | Topic destino para datos climáticos (por defecto: `weather`). |
+| `PUBSUB_TOPIC_AIR` | Topic destino para calidad del aire (por defecto: `air-quality`). |
+| `INGEST_INTERVAL_SECONDS` | Segundos de pausa entre cada medición (por defecto: `60`). |
 
-Nuestros scripts son a prueba de fallos. Si los ejecutas tal cual, entrarán en **"Modo Simulacro" (MOCK)**: se inventarán datos de clima realistas y los imprimirán en tu pantalla, sin necesidad de conectarse a Google Cloud ni gastar en APIs de pago.
+## 📦 Cómo Ejecutarlo
 
-Abre tu terminal, entra en esta carpeta y ejecuta:
+El proyecto incluye un `dockerfile` multi-etapa que permite construir de forma independiente el recolector que necesites.
 
+**1. Para construir el ingestor del Clima:**
 ```bash
-# 1. Instala las librerías necesarias
-pip install -r requirements.txt
-
-# 2. Enciende el reportero de calidad del aire (pulsa Ctrl+C para apagarlo)
-python calidad_aire.py
-
-# 3. O enciende el reportero del clima (pulsa Ctrl+C para apagarlo)
-python clima.py
-```
-
-[calidad_aire.py] y [clima.py] 
-       ↓ 
- Envían un JSON cada 30 segundos
-       ↓
-[Google Pub/Sub] (Nuestras antenas)
-       ↓
-[Apache Beam / Dataflow] (El código que transforma los datos)
-       ↓
-[BigQuery] (Donde se guarda el historial)
+docker build -t cloudrisk-weather-ingestor --target weather .
+docker run -e PUBSUB_PROJECT=tu-project-id cloudrisk-weather-ingestor
